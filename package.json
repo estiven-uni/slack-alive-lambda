@@ -1,0 +1,19 @@
+{
+  "name": "slack-alive-lambda",
+  "version": "1.0.0",
+  "description": "Lambda function para mantener Slack activo con notificaciones Telegram",
+  "main": "lambda_function.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "slack",
+    "lambda",
+    "aws",
+    "telegram",
+    "notifications"
+  ],
+  "author": "",
+  "license": "ISC"
+}
+

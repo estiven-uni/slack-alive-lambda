@@ -1,0 +1,16 @@
+# Dependencias
+node_modules/
+package-lock.json
+
+# Archivos temporales
+*.log
+*.tmp
+.DS_Store
+
+# Variables de entorno (no subir tokens)
+.env
+*.env
+
+# Archivos de Lambda
+*.zip
+
