@@ -475,8 +475,8 @@ async function verificarMomentosClave(fecha) {
     const horaFormato = formatearHoraAMPM(fecha);
     let mensaje = null;
     
-    // Verificar si estamos en un momento clave (dentro del primer minuto de la hora)
-    if (minuto === 0 || minuto === 1) {
+    // Verificar si estamos en un momento clave (solo en el minuto 0 exacto)
+    if (minuto === 0) {
         const fechaFormato = formatearFecha(fecha);
         const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
         const nombreDia = diasSemana[diaSemana];
