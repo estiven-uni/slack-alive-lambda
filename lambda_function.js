@@ -427,9 +427,9 @@ async function establecerEstadoAusente() {
 }
 
 /**
- * Envía un mensaje a Telegram
+ * Envía un mensaje a Telegram con opciones de teclado
  */
-async function enviarNotificacionTelegram(mensaje, chatId = null, replyToMessageId = null) {
+async function enviarNotificacionTelegram(mensaje, chatId = null, replyToMessageId = null, replyKeyboard = null, inlineKeyboard = null) {
     if (!TELEGRAM_BOT_TOKEN) {
         console.warn('⚠️ Telegram no configurado - TELEGRAM_BOT_TOKEN faltante');
         return false;
@@ -450,6 +450,20 @@ async function enviarNotificacionTelegram(mensaje, chatId = null, replyToMessage
         
         if (replyToMessageId) {
             messageData.reply_to_message_id = replyToMessageId;
+        }
+        
+        if (replyKeyboard) {
+            messageData.reply_markup = {
+                keyboard: replyKeyboard,
+                resize_keyboard: true,
+                one_time_keyboard: false
+            };
+        }
+        
+        if (inlineKeyboard) {
+            messageData.reply_markup = {
+                inline_keyboard: inlineKeyboard
+            };
         }
         
         const postData = JSON.stringify(messageData);
@@ -564,35 +578,152 @@ async function verificarMomentosClave(fecha) {
 }
 
 /**
- * Procesa comandos de Telegram
+ * Crea el teclado principal con botones
  */
-async function procesarComandoTelegram(comando, chatId, messageId) {
+function crearTecladoPrincipal() {
+    return [
+        [
+            { text: '📊 Estado' },
+            { text: '⚙️ Configuración' }
+        ],
+        [
+            { text: '🟢 Activo' },
+            { text: '🟡 Ausente' }
+        ],
+        [
+            { text: 'ℹ️ Info' },
+            { text: '🕐 Horario' }
+        ],
+        [
+            { text: '🧪 Test' },
+            { text: '❓ Ayuda' }
+        ]
+    ];
+}
+
+/**
+ * Crea teclado inline para acciones rápidas
+ */
+function crearTecladoInline() {
+    return [
+        [
+            { text: '🟢 Activo', callback_data: 'set_active' },
+            { text: '🟡 Ausente', callback_data: 'set_away' }
+        ],
+        [
+            { text: '📊 Ver Estado', callback_data: 'get_status' },
+            { text: 'ℹ️ Info', callback_data: 'get_info' }
+        ],
+        [
+            { text: '🕐 Horario', callback_data: 'get_horario' },
+            { text: '🧪 Test', callback_data: 'test_connection' }
+        ]
+    ];
+}
+
+/**
+ * Responde a un callback de botón inline
+ */
+async function responderCallback(callbackId) {
+    if (!TELEGRAM_BOT_TOKEN) {
+        return false;
+    }
+    
+    try {
+        const postData = JSON.stringify({
+            callback_query_id: callbackId
+        });
+        
+        const options = {
+            hostname: 'api.telegram.org',
+            port: 443,
+            path: `/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+            },
+            timeout: 5000
+        };
+        
+        return new Promise((resolve) => {
+            const req = https.request(options, (res) => {
+                let responseData = '';
+                
+                res.on('data', (chunk) => {
+                    responseData += chunk;
+                });
+                
+                res.on('end', () => {
+                    try {
+                        const jsonData = JSON.parse(responseData);
+                        resolve(jsonData.ok || false);
+                    } catch (error) {
+                        resolve(false);
+                    }
+                });
+            });
+            
+            req.on('error', () => resolve(false));
+            req.on('timeout', () => {
+                req.destroy();
+                resolve(false);
+            });
+            
+            req.write(postData);
+            req.end();
+        });
+    } catch (error) {
+        return false;
+    }
+}
+
+/**
+ * Procesa comandos de Telegram y mensajes de texto
+ */
+async function procesarComandoTelegram(comando, chatId, messageId, esTexto = false) {
     const ahora = obtenerHoraColombia();
     const horaFormato = formatearHoraAMPM(ahora);
     const fechaFormato = formatearFecha(ahora);
     const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     const nombreDia = diasSemana[ahora.getDay()];
     
+    // Mapeo de textos a comandos
+    const textoAComando = {
+        '📊 estado': '/status',
+        'estado': '/status',
+        '⚙️ configuración': '/horario',
+        'configuración': '/horario',
+        '🟢 activo': '/setactive',
+        'activo': '/setactive',
+        '🟡 ausente': '/setaway',
+        'ausente': '/setaway',
+        'ℹ️ info': '/info',
+        'info': '/info',
+        '🕐 horario': '/horario',
+        'horario': '/horario',
+        '🧪 test': '/test',
+        'test': '/test',
+        '❓ ayuda': '/help',
+        'ayuda': '/help'
+    };
+    
+    // Si es texto y está en el mapeo, convertir a comando
+    if (esTexto && textoAComando[comando.toLowerCase()]) {
+        comando = textoAComando[comando.toLowerCase()];
+    }
+    
     switch (comando) {
         case '/start':
         case '/help':
+            const teclado = crearTecladoPrincipal();
             return await enviarNotificacionTelegram(
-                `🤖 <b>Slack Alive Bot - Comandos Disponibles</b>\n\n` +
-                `<b>Comandos de Estado:</b>\n` +
-                `/status - Ver estado actual de Slack\n` +
-                `/setactive - Establecer estado ACTIVO manualmente\n` +
-                `/setaway - Establecer estado AUSENTE manualmente\n\n` +
-                `<b>Comandos de Configuración:</b>\n` +
-                `/horario - Ver horario laboral configurado\n` +
-                `/sethorario - Configurar nuevos horarios\n\n` +
-                `<b>Comandos de Información:</b>\n` +
-                `/info - Ver información del sistema\n` +
-                `/help - Mostrar esta ayuda\n\n` +
-                `<b>Comandos de Prueba:</b>\n` +
-                `/test - Probar conexión con Slack\n\n` +
-                `💡 <i>Usa estos comandos para controlar tu estado de Slack desde Telegram</i>`,
+                `🤖 <b>Slack Alive Bot</b>\n\n` +
+                `¡Bienvenido! Usa los botones de abajo para controlar tu estado de Slack.\n\n` +
+                `💡 <i>También puedes escribir comandos como /status, /setactive, etc.</i>`,
                 chatId,
-                messageId
+                messageId,
+                teclado
             );
         
         case '/status':
@@ -618,6 +749,7 @@ async function procesarComandoTelegram(comando, chatId, messageId) {
                 horarioTexto = '⏸️ Fuera de horario laboral';
             }
             
+            const tecladoEstado = crearTecladoInline();
             return await enviarNotificacionTelegram(
                 `📊 <b>Estado Actual de Slack</b>\n\n` +
                 `Estado: ${estadoTexto}\n` +
@@ -626,7 +758,9 @@ async function procesarComandoTelegram(comando, chatId, messageId) {
                 `🕐 Hora: ${horaFormato}\n` +
                 `🌍 Zona horaria: Colombia (America/Bogota)`,
                 chatId,
-                messageId
+                messageId,
+                null,
+                tecladoEstado
             );
         
         case '/setactive':
@@ -634,12 +768,15 @@ async function procesarComandoTelegram(comando, chatId, messageId) {
             if (resultadoActivo) {
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 const estadoDespues = await obtenerEstadoSlack();
+                const tecladoAccion = crearTecladoInline();
                 return await enviarNotificacionTelegram(
                     `✅ <b>Estado establecido como ACTIVO</b>\n\n` +
                     `Estado actual: ${estadoDespues === 'active' ? '🟢 ACTIVO' : '⚠️ ' + estadoDespues}\n` +
                     `Hora: ${horaFormato}`,
                     chatId,
-                    messageId
+                    messageId,
+                    null,
+                    tecladoAccion
                 );
             } else {
                 return await enviarNotificacionTelegram(
@@ -655,12 +792,15 @@ async function procesarComandoTelegram(comando, chatId, messageId) {
             if (resultadoAusente) {
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 const estadoDespues = await obtenerEstadoSlack();
+                const tecladoAccion = crearTecladoInline();
                 return await enviarNotificacionTelegram(
                     `🏠 <b>Estado establecido como AUSENTE</b>\n\n` +
                     `Estado actual: ${estadoDespues === 'away' ? '🟡 AUSENTE' : '⚠️ ' + estadoDespues}\n` +
                     `Hora: ${horaFormato}`,
                     chatId,
-                    messageId
+                    messageId,
+                    null,
+                    tecladoAccion
                 );
             } else {
                 return await enviarNotificacionTelegram(
@@ -796,11 +936,13 @@ async function procesarComandoTelegram(comando, chatId, messageId) {
             );
         
         default:
+            const tecladoDefault = crearTecladoPrincipal();
             return await enviarNotificacionTelegram(
                 `❓ <b>Comando no reconocido</b>\n\n` +
-                `Usa /help para ver la lista de comandos disponibles.`,
+                `Usa los botones de abajo o escribe /help para ver la lista de comandos disponibles.`,
                 chatId,
-                messageId
+                messageId,
+                tecladoDefault
             );
     }
 }
@@ -822,6 +964,46 @@ export const telegramHandler = async (event, context) => {
             return {
                 statusCode: 200,
                 body: JSON.stringify({ ok: true, message: 'Error parseando body' })
+            };
+        }
+        
+        // Manejar callbacks de botones inline
+        if (body.callback_query) {
+            const callback = body.callback_query;
+            const chatId = callback.message.chat.id;
+            const messageId = callback.message.message_id;
+            const callbackData = callback.data;
+            const callbackId = callback.id;
+            
+            console.log(`🔘 Callback recibido: ${callbackData} de chat ${chatId}`);
+            
+            // Verificar autorización
+            if (TELEGRAM_CHAT_ID && String(chatId) !== String(TELEGRAM_CHAT_ID)) {
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({ ok: true })
+                };
+            }
+            
+            // Responder al callback primero (para quitar el "loading" del botón)
+            await responderCallback(callbackId);
+            
+            // Procesar el callback como si fuera un comando
+            const comandoMap = {
+                'set_active': '/setactive',
+                'set_away': '/setaway',
+                'get_status': '/status',
+                'get_info': '/info',
+                'get_horario': '/horario',
+                'test_connection': '/test'
+            };
+            
+            const comando = comandoMap[callbackData] || callbackData;
+            await procesarComandoTelegram(comando, chatId, messageId);
+            
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ ok: true })
             };
         }
         
@@ -861,22 +1043,23 @@ export const telegramHandler = async (event, context) => {
             };
         }
         
-        // Verificar que sea un comando (empieza con /)
+        // Procesar texto (puede ser comando o texto de botón)
+        let comando = text;
+        let esTexto = false;
+        
+        // Si no empieza con /, es texto de botón
         if (!text.startsWith('/')) {
-            console.log('⚠️ No es un comando');
-            return {
-                statusCode: 200,
-                body: JSON.stringify({ ok: true, message: 'No es un comando' })
-            };
+            esTexto = true;
+            comando = text;
+        } else {
+            // Extraer el comando (puede tener parámetros)
+            comando = text.split(' ')[0].toLowerCase();
         }
         
-        // Extraer el comando (puede tener parámetros)
-        const comando = text.split(' ')[0].toLowerCase();
+        console.log(`📱 Procesando: ${comando} (${esTexto ? 'texto' : 'comando'}) de chat ${chatId}`);
         
-        console.log(`📱 Comando recibido: ${comando} de chat ${chatId}`);
-        
-        // Procesar el comando
-        await procesarComandoTelegram(comando, chatId, messageId);
+        // Procesar el comando o texto
+        await procesarComandoTelegram(comando, chatId, messageId, esTexto);
         
         return {
             statusCode: 200,
