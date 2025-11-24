@@ -1241,11 +1241,27 @@ async function cloudWatchHandler(event, context) {
     // Verificar momentos clave y enviar notificaciones
     await verificarMomentosClave(ahora);
     
-    // CASO 1: Horario de almuerzo (1pm-2pm) en día laboral - Establecer AUSENTE
+    // PRIMERO: Obtener estado actual de Slack (SIEMPRE verificar primero)
+    const estadoAntes = await obtenerEstadoSlack();
+    console.log(`🔍 Estado actual de Slack: ${estadoAntes}`);
+    
+    // CASO 1: Fuera de horario laboral (fines de semana, días festivos, antes de las 8am)
+    if (!esDiaLaboral || esDiaFestivo || esAntesHorarioLaboral) {
+        console.log(`⏸️ Fuera de horario laboral (${horaFormato})`);
+        return {
+            statusCode: 200,
+            body: JSON.stringify({
+                message: 'Fuera de horario laboral',
+                hora: horaFormato,
+                estado_actual: estadoAntes,
+                accion: 'ninguna'
+            })
+        };
+    }
+    
+    // CASO 2: Horario de almuerzo (1pm-2pm) en día laboral - Establecer AUSENTE
     if (esHorarioAlmuerzo && esDiaLaboral && !esDiaFestivo) {
         console.log(`🍽️ Horario de almuerzo (${horaFormato}) - Estableciendo estado AUSENTE`);
-        
-        const estadoAntes = await obtenerEstadoSlack();
         
         if (await establecerEstadoAusente()) {
             await new Promise(resolve => setTimeout(resolve, 1500));
@@ -1277,11 +1293,9 @@ async function cloudWatchHandler(event, context) {
         }
     }
     
-    // CASO 2: Después de las 5pm (17:00) en día laboral - Establecer AUSENTE
+    // CASO 3: Después de las 5pm (17:00) en día laboral - Establecer AUSENTE
     if (esDespuesHorarioLaboral && esDiaLaboral && !esDiaFestivo) {
         console.log(`🏠 Fuera de horario laboral (${horaFormato}) - Estableciendo estado AUSENTE`);
-        
-        const estadoAntes = await obtenerEstadoSlack();
         
         if (await establecerEstadoAusente()) {
             await new Promise(resolve => setTimeout(resolve, 1500));
@@ -1306,68 +1320,42 @@ async function cloudWatchHandler(event, context) {
                 body: JSON.stringify({
                     message: 'Error al establecer estado ausente',
                     hora: horaFormato,
+                    estado_antes: estadoAntes,
                     accion: 'error'
                 })
             };
         }
     }
     
-    // CASO 3: Fuera de horario laboral (fines de semana, días festivos, antes de las 8am)
-    if (!esDiaLaboral || esDiaFestivo || esAntesHorarioLaboral) {
-        console.log(`⏸️ Fuera de horario laboral (${horaFormato})`);
-        return {
-            statusCode: 200,
-            body: JSON.stringify({
-                message: 'Fuera de horario laboral',
-                hora: horaFormato,
-                accion: 'ninguna'
-            })
-        };
-    }
-    
-    // CASO 4: En horario laboral (incluye regreso del almuerzo después de las 2pm) - Establecer ACTIVO
+    // CASO 4: En horario laboral (8am-5pm, excepto almuerzo) - Verificar y establecer ACTIVO
     // Verificar si acabamos de regresar del almuerzo (primeros minutos después de las 2pm)
     const minutosActuales = ahora.getMinutes();
     const esRegresoAlmuerzo = horaActual === HORA_ALMUERZO_FIN && minutosActuales < 5; // Primeros 5 minutos después de las 2pm
     
-    console.log(`🔍 Debug: horaActual=${horaActual}, minutos=${minutosActuales}, HORA_ALMUERZO_FIN=${HORA_ALMUERZO_FIN}, esRegresoAlmuerzo=${esRegresoAlmuerzo}`);
+    console.log(`✅ Horario laboral (${horaFormato}) - Verificando estado...`);
     
-    if (esRegresoAlmuerzo) {
-        console.log(`⏰ Regreso del almuerzo (${horaFormato}) - Estableciendo estado ACTIVO`);
-    } else {
-        console.log(`✅ Horario laboral (${horaFormato}) - Verificando estado...`);
-    }
-    
-    // Obtener estado actual
-    const estadoAntes = await obtenerEstadoSlack();
-    console.log(`🔍 Estado actual de Slack: ${estadoAntes}`);
-    
-    // Si está ausente y es regreso del almuerzo, enviar notificación especial
-    if (estadoAntes === 'away' && esRegresoAlmuerzo) {
+    // DETECCIÓN DE AUSENTE: Si está ausente durante horario laboral, enviar notificación INMEDIATAMENTE
+    if (estadoAntes === 'away') {
         const fechaFormato = formatearFecha(ahora);
         const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
         const nombreDia = diasSemana[ahora.getDay()];
         
-        const mensaje = `⏰ <b>Regreso del almuerzo</b>\n\n` +
-                       `Fecha: ${fechaFormato} (${nombreDia})\n` +
-                       `Hora: ${horaFormato}\n\n` +
-                       `🔄 Cambiando estado de AUSENTE a ACTIVO...`;
-        
-        await enviarNotificacionTelegram(mensaje);
-    }
-    // Si está ausente en horario laboral normal (no regreso de almuerzo), enviar notificación
-    else if (estadoAntes === 'away' && !esRegresoAlmuerzo) {
-        const fechaFormato = formatearFecha(ahora);
-        const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-        const nombreDia = diasSemana[ahora.getDay()];
-        
-        const mensaje = `⚠️ <b>Estado AUSENTE detectado en Slack</b>\n\n` +
-                       `Fecha: ${fechaFormato} (${nombreDia})\n` +
-                       `Hora: ${horaFormato}\n` +
-                       `Estado: AUSENTE\n\n` +
-                       `Abre Slack para mantenerte activo.`;
-        
-        await enviarNotificacionTelegram(mensaje);
+        if (esRegresoAlmuerzo) {
+            // Notificación especial para regreso del almuerzo
+            const mensaje = `⏰ <b>Regreso del almuerzo</b>\n\n` +
+                           `Fecha: ${fechaFormato} (${nombreDia})\n` +
+                           `Hora: ${horaFormato}\n\n` +
+                           `🔄 Cambiando estado de AUSENTE a ACTIVO...`;
+            await enviarNotificacionTelegram(mensaje);
+        } else {
+            // Notificación normal de ausente detectado
+            const mensaje = `⚠️ <b>Estado AUSENTE detectado en Slack</b>\n\n` +
+                           `Fecha: ${fechaFormato} (${nombreDia})\n` +
+                           `Hora: ${horaFormato}\n` +
+                           `Estado: AUSENTE\n\n` +
+                           `Abre Slack para mantenerte activo.`;
+            await enviarNotificacionTelegram(mensaje);
+        }
     }
     
     // Establecer estado activo
