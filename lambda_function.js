@@ -622,6 +622,114 @@ function crearTecladoInline() {
 }
 
 /**
+ * Configura los comandos del bot en Telegram para autocompletado
+ */
+async function configurarComandosBot(chatId = null) {
+    if (!TELEGRAM_BOT_TOKEN) {
+        return false;
+    }
+    
+    const comandos = [
+        {
+            command: 'start',
+            description: 'Iniciar el bot y ver el menú principal'
+        },
+        {
+            command: 'status',
+            description: 'Ver el estado actual de Slack'
+        },
+        {
+            command: 'setactive',
+            description: 'Establecer estado ACTIVO en Slack'
+        },
+        {
+            command: 'setaway',
+            description: 'Establecer estado AUSENTE en Slack'
+        },
+        {
+            command: 'info',
+            description: 'Ver información del sistema'
+        },
+        {
+            command: 'horario',
+            description: 'Ver horario laboral configurado'
+        },
+        {
+            command: 'sethorario',
+            description: 'Configurar nuevos horarios'
+        },
+        {
+            command: 'test',
+            description: 'Probar conexión con Slack'
+        },
+        {
+            command: 'help',
+            description: 'Ver ayuda y comandos disponibles'
+        }
+    ];
+    
+    try {
+        const postData = JSON.stringify({
+            commands: comandos,
+            scope: chatId ? {
+                type: 'chat',
+                chat_id: chatId
+            } : { type: 'default' }
+        });
+        
+        const options = {
+            hostname: 'api.telegram.org',
+            port: 443,
+            path: `/bot${TELEGRAM_BOT_TOKEN}/setMyCommands`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+            },
+            timeout: 5000
+        };
+        
+        return new Promise((resolve) => {
+            const req = https.request(options, (res) => {
+                let responseData = '';
+                
+                res.on('data', (chunk) => {
+                    responseData += chunk;
+                });
+                
+                res.on('end', () => {
+                    try {
+                        const jsonData = JSON.parse(responseData);
+                        if (jsonData.ok) {
+                            console.log('✅ Comandos configurados en Telegram');
+                            resolve(true);
+                        } else {
+                            console.warn(`⚠️ Error configurando comandos: ${jsonData.description || 'unknown'}`);
+                            resolve(false);
+                        }
+                    } catch (error) {
+                        console.warn(`⚠️ Error parseando respuesta: ${error.message}`);
+                        resolve(false);
+                    }
+                });
+            });
+            
+            req.on('error', () => resolve(false));
+            req.on('timeout', () => {
+                req.destroy();
+                resolve(false);
+            });
+            
+            req.write(postData);
+            req.end();
+        });
+    } catch (error) {
+        console.warn(`⚠️ Error configurando comandos: ${error.message}`);
+        return false;
+    }
+}
+
+/**
  * Responde a un callback de botón inline
  */
 async function responderCallback(callbackId) {
@@ -716,11 +824,14 @@ async function procesarComandoTelegram(comando, chatId, messageId, esTexto = fal
     switch (comando) {
         case '/start':
         case '/help':
+            // Configurar comandos del bot automáticamente al iniciar
+            await configurarComandosBot(chatId);
+            
             const teclado = crearTecladoPrincipal();
             return await enviarNotificacionTelegram(
                 `🤖 <b>Slack Alive Bot</b>\n\n` +
                 `¡Bienvenido! Usa los botones de abajo para controlar tu estado de Slack.\n\n` +
-                `💡 <i>También puedes escribir comandos como /status, /setactive, etc.</i>`,
+                `💡 <i>También puedes escribir "/" para ver comandos con autocompletado o usar los botones.</i>`,
                 chatId,
                 messageId,
                 teclado
