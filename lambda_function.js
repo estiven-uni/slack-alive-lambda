@@ -811,25 +811,50 @@ async function procesarComandoTelegram(comando, chatId, messageId) {
  */
 export const telegramHandler = async (event, context) => {
     try {
-        // Parsear el body del evento
-        const body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+        console.log('📱 Evento recibido de Telegram:', JSON.stringify(event));
         
-        // Verificar que sea un mensaje válido
-        if (!body.message || !body.message.text) {
+        // Parsear el body del evento (Lambda Function URL envía el body como string)
+        let body;
+        try {
+            body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+        } catch (parseError) {
+            console.error('❌ Error parseando body:', parseError.message);
             return {
                 statusCode: 200,
-                body: JSON.stringify({ ok: true, message: 'No es un mensaje de texto' })
+                body: JSON.stringify({ ok: true, message: 'Error parseando body' })
+            };
+        }
+        
+        // Verificar que sea un mensaje válido
+        if (!body || !body.message) {
+            console.log('⚠️ No es un mensaje válido');
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ ok: true, message: 'No es un mensaje válido' })
             };
         }
         
         const message = body.message;
+        
+        // Verificar que tenga texto (puede ser un comando o mensaje normal)
+        if (!message.text) {
+            console.log('⚠️ Mensaje sin texto');
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ ok: true, message: 'Mensaje sin texto' })
+            };
+        }
+        
         const chatId = message.chat.id;
         const messageId = message.message_id;
         const text = message.text.trim();
         
+        console.log(`📱 Mensaje recibido de chat ${chatId}: ${text}`);
+        
         // Verificar que el comando venga del chat autorizado (si está configurado)
+        // Si TELEGRAM_CHAT_ID no está configurado, acepta mensajes de cualquier chat
         if (TELEGRAM_CHAT_ID && String(chatId) !== String(TELEGRAM_CHAT_ID)) {
-            console.warn(`⚠️ Mensaje de chat no autorizado: ${chatId}`);
+            console.warn(`⚠️ Mensaje de chat no autorizado: ${chatId} (esperado: ${TELEGRAM_CHAT_ID})`);
             return {
                 statusCode: 200,
                 body: JSON.stringify({ ok: true, message: 'Chat no autorizado' })
@@ -838,6 +863,7 @@ export const telegramHandler = async (event, context) => {
         
         // Verificar que sea un comando (empieza con /)
         if (!text.startsWith('/')) {
+            console.log('⚠️ No es un comando');
             return {
                 statusCode: 200,
                 body: JSON.stringify({ ok: true, message: 'No es un comando' })
@@ -859,8 +885,9 @@ export const telegramHandler = async (event, context) => {
         
     } catch (error) {
         console.error(`❌ Error procesando comando Telegram: ${error.message}`);
+        console.error(`❌ Stack trace: ${error.stack}`);
         return {
-            statusCode: 500,
+            statusCode: 200, // Retornar 200 para que Telegram no siga reintentando
             body: JSON.stringify({ ok: false, error: error.message })
         };
     }
@@ -871,13 +898,35 @@ export const telegramHandler = async (event, context) => {
  * Detecta el tipo de evento y ejecuta el handler correspondiente
  */
 export const handler = async (event, context) => {
-    // Detectar si es un webhook de Telegram (tiene body.message)
-    if (event.body && (typeof event.body === 'string' ? JSON.parse(event.body) : event.body).message) {
-        return await telegramHandler(event, context);
+    try {
+        // Detectar si es un webhook de Telegram (Lambda Function URL)
+        // Los eventos de Telegram vienen con body.message
+        if (event.body) {
+            let body;
+            try {
+                body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+            } catch (e) {
+                // Si no se puede parsear, probablemente no es Telegram
+                body = event.body;
+            }
+            
+            if (body && body.message) {
+                console.log('📱 Detectado evento de Telegram');
+                return await telegramHandler(event, context);
+            }
+        }
+        
+        // Si no es Telegram, es el evento programado de CloudWatch
+        console.log('⏰ Detectado evento de CloudWatch');
+        return await cloudWatchHandler(event, context);
+    } catch (error) {
+        console.error(`❌ Error en handler principal: ${error.message}`);
+        console.error(`❌ Stack trace: ${error.stack}`);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: error.message })
+        };
     }
-    
-    // Si no es Telegram, es el evento programado de CloudWatch
-    return await cloudWatchHandler(event, context);
 };
 
 /**
