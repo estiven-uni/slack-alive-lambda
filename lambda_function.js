@@ -12,11 +12,12 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TIMEZONE_COLOMBIA = 'America/Bogota';
 
-// Horarios de trabajo (hora de Colombia)
-const HORA_INICIO = 8;  // 8:00 AM
-const HORA_FIN = 17;    // 5:00 PM
-const HORA_ALMUERZO_INICIO = 13;  // 1:00 PM
-const HORA_ALMUERZO_FIN = 14;     // 2:00 PM
+// Horarios de trabajo configurables desde variables de entorno (hora de Colombia)
+// Valores por defecto si no están configurados
+const HORA_INICIO = parseInt(process.env.HORA_INICIO || '8');  // 8:00 AM por defecto
+const HORA_FIN = parseInt(process.env.HORA_FIN || '17');        // 5:00 PM por defecto
+const HORA_ALMUERZO_INICIO = parseInt(process.env.HORA_ALMUERZO_INICIO || '13');  // 1:00 PM por defecto
+const HORA_ALMUERZO_FIN = parseInt(process.env.HORA_ALMUERZO_FIN || '14');       // 2:00 PM por defecto
 
 // Cache de días festivos (para evitar múltiples llamadas a la API)
 let cacheFestivos = {};
@@ -428,19 +429,30 @@ async function establecerEstadoAusente() {
 /**
  * Envía un mensaje a Telegram
  */
-async function enviarNotificacionTelegram(mensaje) {
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-        console.warn('⚠️ Telegram no configurado - TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID faltantes');
+async function enviarNotificacionTelegram(mensaje, chatId = null, replyToMessageId = null) {
+    if (!TELEGRAM_BOT_TOKEN) {
+        console.warn('⚠️ Telegram no configurado - TELEGRAM_BOT_TOKEN faltante');
+        return false;
+    }
+    
+    const targetChatId = chatId || TELEGRAM_CHAT_ID;
+    if (!targetChatId) {
+        console.warn('⚠️ Telegram no configurado - TELEGRAM_CHAT_ID faltante');
         return false;
     }
     
     try {
-        const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-        const postData = JSON.stringify({
-            chat_id: TELEGRAM_CHAT_ID,
+        const messageData = {
+            chat_id: targetChatId,
             text: mensaje,
             parse_mode: 'HTML'
-        });
+        };
+        
+        if (replyToMessageId) {
+            messageData.reply_to_message_id = replyToMessageId;
+        }
+        
+        const postData = JSON.stringify(messageData);
         
         const options = {
             hostname: 'api.telegram.org',
@@ -552,10 +564,327 @@ async function verificarMomentosClave(fecha) {
 }
 
 /**
+ * Procesa comandos de Telegram
+ */
+async function procesarComandoTelegram(comando, chatId, messageId) {
+    const ahora = obtenerHoraColombia();
+    const horaFormato = formatearHoraAMPM(ahora);
+    const fechaFormato = formatearFecha(ahora);
+    const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const nombreDia = diasSemana[ahora.getDay()];
+    
+    switch (comando) {
+        case '/start':
+        case '/help':
+            return await enviarNotificacionTelegram(
+                `🤖 <b>Slack Alive Bot - Comandos Disponibles</b>\n\n` +
+                `<b>Comandos de Estado:</b>\n` +
+                `/status - Ver estado actual de Slack\n` +
+                `/setactive - Establecer estado ACTIVO manualmente\n` +
+                `/setaway - Establecer estado AUSENTE manualmente\n\n` +
+                `<b>Comandos de Configuración:</b>\n` +
+                `/horario - Ver horario laboral configurado\n` +
+                `/sethorario - Configurar nuevos horarios\n\n` +
+                `<b>Comandos de Información:</b>\n` +
+                `/info - Ver información del sistema\n` +
+                `/help - Mostrar esta ayuda\n\n` +
+                `<b>Comandos de Prueba:</b>\n` +
+                `/test - Probar conexión con Slack\n\n` +
+                `💡 <i>Usa estos comandos para controlar tu estado de Slack desde Telegram</i>`,
+                chatId,
+                messageId
+            );
+        
+        case '/status':
+            const estadoActual = await obtenerEstadoSlack();
+            const enHorarioLaboral = await estaEnHorarioLaboral();
+            const esFestivo = await esDiaFestivo(ahora);
+            
+            let estadoTexto = '';
+            if (estadoActual === 'active') {
+                estadoTexto = '🟢 ACTIVO';
+            } else if (estadoActual === 'away') {
+                estadoTexto = '🟡 AUSENTE';
+            } else {
+                estadoTexto = '🔴 ERROR';
+            }
+            
+            let horarioTexto = '';
+            if (esFestivo) {
+                horarioTexto = '📅 Día festivo';
+            } else if (enHorarioLaboral) {
+                horarioTexto = '✅ En horario laboral';
+            } else {
+                horarioTexto = '⏸️ Fuera de horario laboral';
+            }
+            
+            return await enviarNotificacionTelegram(
+                `📊 <b>Estado Actual de Slack</b>\n\n` +
+                `Estado: ${estadoTexto}\n` +
+                `Horario: ${horarioTexto}\n\n` +
+                `📅 Fecha: ${fechaFormato} (${nombreDia})\n` +
+                `🕐 Hora: ${horaFormato}\n` +
+                `🌍 Zona horaria: Colombia (America/Bogota)`,
+                chatId,
+                messageId
+            );
+        
+        case '/setactive':
+            const resultadoActivo = await establecerEstadoActivo();
+            if (resultadoActivo) {
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const estadoDespues = await obtenerEstadoSlack();
+                return await enviarNotificacionTelegram(
+                    `✅ <b>Estado establecido como ACTIVO</b>\n\n` +
+                    `Estado actual: ${estadoDespues === 'active' ? '🟢 ACTIVO' : '⚠️ ' + estadoDespues}\n` +
+                    `Hora: ${horaFormato}`,
+                    chatId,
+                    messageId
+                );
+            } else {
+                return await enviarNotificacionTelegram(
+                    `❌ <b>Error al establecer estado ACTIVO</b>\n\n` +
+                    `Revisa los logs de Lambda para más detalles.`,
+                    chatId,
+                    messageId
+                );
+            }
+        
+        case '/setaway':
+            const resultadoAusente = await establecerEstadoAusente();
+            if (resultadoAusente) {
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const estadoDespues = await obtenerEstadoSlack();
+                return await enviarNotificacionTelegram(
+                    `🏠 <b>Estado establecido como AUSENTE</b>\n\n` +
+                    `Estado actual: ${estadoDespues === 'away' ? '🟡 AUSENTE' : '⚠️ ' + estadoDespues}\n` +
+                    `Hora: ${horaFormato}`,
+                    chatId,
+                    messageId
+                );
+            } else {
+                return await enviarNotificacionTelegram(
+                    `❌ <b>Error al establecer estado AUSENTE</b>\n\n` +
+                    `Revisa los logs de Lambda para más detalles.`,
+                    chatId,
+                    messageId
+                );
+            }
+        
+        case '/info':
+            const enHorario = await estaEnHorarioLaboral();
+            const esFestivoInfo = await esDiaFestivo(ahora);
+            const estadoInfo = await obtenerEstadoSlack();
+            
+            return await enviarNotificacionTelegram(
+                `ℹ️ <b>Información del Sistema</b>\n\n` +
+                `<b>Estado Slack:</b> ${estadoInfo === 'active' ? '🟢 ACTIVO' : estadoInfo === 'away' ? '🟡 AUSENTE' : '🔴 ERROR'}\n` +
+                `<b>Horario laboral:</b> ${enHorario ? '✅ Activo' : '⏸️ Inactivo'}\n` +
+                `<b>Día festivo:</b> ${esFestivoInfo ? '📅 Sí' : '❌ No'}\n\n` +
+                `<b>Configuración:</b>\n` +
+                `Inicio: ${HORA_INICIO}:00 AM\n` +
+                `Fin: ${HORA_FIN}:00 PM\n` +
+                `Almuerzo: ${HORA_ALMUERZO_INICIO}:00 PM - ${HORA_ALMUERZO_FIN}:00 PM\n\n` +
+                `<b>Fecha/Hora:</b>\n` +
+                `${fechaFormato} (${nombreDia})\n` +
+                `${horaFormato} (Colombia)`,
+                chatId,
+                messageId
+            );
+        
+        case '/horario':
+            return await enviarNotificacionTelegram(
+                `🕐 <b>Horario Laboral Configurado</b>\n\n` +
+                `<b>Horario de trabajo:</b>\n` +
+                `Inicio: ${HORA_INICIO}:00 ${HORA_INICIO < 12 ? 'AM' : 'PM'}\n` +
+                `Fin: ${HORA_FIN}:00 ${HORA_FIN < 12 ? 'AM' : 'PM'}\n\n` +
+                `<b>Horario de almuerzo:</b>\n` +
+                `${HORA_ALMUERZO_INICIO}:00 ${HORA_ALMUERZO_INICIO < 12 ? 'AM' : 'PM'} - ${HORA_ALMUERZO_FIN}:00 ${HORA_ALMUERZO_FIN < 12 ? 'AM' : 'PM'}\n\n` +
+                `<b>Días laborales:</b> Lunes a Viernes\n` +
+                `<b>Días no laborales:</b> Sábados, Domingos y días festivos de Colombia\n\n` +
+                `💡 Usa /sethorario para cambiar estos horarios`,
+                chatId,
+                messageId
+            );
+        
+        case '/sethorario':
+            // Parsear parámetros del comando
+            // Formato: /sethorario inicio=8 fin=17 almuerzo_inicio=13 almuerzo_fin=14
+            const partes = text.split(' ').slice(1);
+            const parametros = {};
+            
+            partes.forEach(parte => {
+                const [key, value] = parte.split('=');
+                if (key && value) {
+                    parametros[key.toLowerCase()] = parseInt(value);
+                }
+            });
+            
+            if (Object.keys(parametros).length === 0) {
+                return await enviarNotificacionTelegram(
+                    `⚙️ <b>Configurar Horarios</b>\n\n` +
+                    `<b>Formato:</b>\n` +
+                    `/sethorario inicio=8 fin=17 almuerzo_inicio=13 almuerzo_fin=14\n\n` +
+                    `<b>Parámetros:</b>\n` +
+                    `• inicio: Hora de inicio (0-23)\n` +
+                    `• fin: Hora de fin (0-23)\n` +
+                    `• almuerzo_inicio: Inicio de almuerzo (0-23)\n` +
+                    `• almuerzo_fin: Fin de almuerzo (0-23)\n\n` +
+                    `<b>Ejemplo:</b>\n` +
+                    `/sethorario inicio=9 fin=18 almuerzo_inicio=13 almuerzo_fin=14\n\n` +
+                    `<b>Horarios actuales:</b>\n` +
+                    `Inicio: ${HORA_INICIO}:00\n` +
+                    `Fin: ${HORA_FIN}:00\n` +
+                    `Almuerzo: ${HORA_ALMUERZO_INICIO}:00 - ${HORA_ALMUERZO_FIN}:00\n\n` +
+                    `⚠️ <i>Nota: Los cambios se aplicarán después de actualizar las variables de entorno en AWS Lambda.</i>`,
+                    chatId,
+                    messageId
+                );
+            }
+            
+            // Validar parámetros
+            const nuevoInicio = parametros.inicio !== undefined ? parametros.inicio : HORA_INICIO;
+            const nuevoFin = parametros.fin !== undefined ? parametros.fin : HORA_FIN;
+            const nuevoAlmuerzoInicio = parametros.almuerzo_inicio !== undefined ? parametros.almuerzo_inicio : HORA_ALMUERZO_INICIO;
+            const nuevoAlmuerzoFin = parametros.almuerzo_fin !== undefined ? parametros.almuerzo_fin : HORA_ALMUERZO_FIN;
+            
+            if (nuevoInicio < 0 || nuevoInicio > 23 || nuevoFin < 0 || nuevoFin > 23 ||
+                nuevoAlmuerzoInicio < 0 || nuevoAlmuerzoInicio > 23 || nuevoAlmuerzoFin < 0 || nuevoAlmuerzoFin > 23) {
+                return await enviarNotificacionTelegram(
+                    `❌ <b>Error: Horarios inválidos</b>\n\n` +
+                    `Las horas deben estar entre 0 y 23.\n` +
+                    `Usa /sethorario para ver el formato correcto.`,
+                    chatId,
+                    messageId
+                );
+            }
+            
+            // Intentar actualizar variables de entorno usando AWS SDK
+            // Por ahora, mostrar instrucciones para actualizar manualmente
+            return await enviarNotificacionTelegram(
+                `⚙️ <b>Nueva Configuración de Horarios</b>\n\n` +
+                `<b>Horarios propuestos:</b>\n` +
+                `Inicio: ${nuevoInicio}:00 ${nuevoInicio < 12 ? 'AM' : 'PM'}\n` +
+                `Fin: ${nuevoFin}:00 ${nuevoFin < 12 ? 'AM' : 'PM'}\n` +
+                `Almuerzo: ${nuevoAlmuerzoInicio}:00 ${nuevoAlmuerzoInicio < 12 ? 'AM' : 'PM'} - ${nuevoAlmuerzoFin}:00 ${nuevoAlmuerzoFin < 12 ? 'AM' : 'PM'}\n\n` +
+                `📝 <b>Para aplicar estos cambios:</b>\n` +
+                `1. Ve a AWS Lambda Console\n` +
+                `2. Selecciona tu función "slack-alive"\n` +
+                `3. Ve a Configuration → Environment variables\n` +
+                `4. Agrega/edita estas variables:\n` +
+                `   • HORA_INICIO = ${nuevoInicio}\n` +
+                `   • HORA_FIN = ${nuevoFin}\n` +
+                `   • HORA_ALMUERZO_INICIO = ${nuevoAlmuerzoInicio}\n` +
+                `   • HORA_ALMUERZO_FIN = ${nuevoAlmuerzoFin}\n` +
+                `5. Guarda los cambios\n\n` +
+                `💡 <i>Los cambios se aplicarán automáticamente en la próxima ejecución.</i>`,
+                chatId,
+                messageId
+            );
+        
+        case '/test':
+            const estadoTest = await obtenerEstadoSlack();
+            const conexionOk = estadoTest !== 'error';
+            
+            return await enviarNotificacionTelegram(
+                `🧪 <b>Prueba de Conexión</b>\n\n` +
+                `Conexión Slack: ${conexionOk ? '✅ OK' : '❌ ERROR'}\n` +
+                `Estado actual: ${estadoTest === 'active' ? '🟢 ACTIVO' : estadoTest === 'away' ? '🟡 AUSENTE' : '🔴 ERROR'}\n\n` +
+                `${conexionOk ? '✅ La conexión con Slack está funcionando correctamente.' : '❌ Hay un problema con la conexión. Revisa los logs.'}`,
+                chatId,
+                messageId
+            );
+        
+        default:
+            return await enviarNotificacionTelegram(
+                `❓ <b>Comando no reconocido</b>\n\n` +
+                `Usa /help para ver la lista de comandos disponibles.`,
+                chatId,
+                messageId
+            );
+    }
+}
+
+/**
+ * Handler para webhooks de Telegram
+ * Se ejecuta cuando Telegram envía un mensaje al bot
+ */
+export const telegramHandler = async (event, context) => {
+    try {
+        // Parsear el body del evento
+        const body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+        
+        // Verificar que sea un mensaje válido
+        if (!body.message || !body.message.text) {
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ ok: true, message: 'No es un mensaje de texto' })
+            };
+        }
+        
+        const message = body.message;
+        const chatId = message.chat.id;
+        const messageId = message.message_id;
+        const text = message.text.trim();
+        
+        // Verificar que el comando venga del chat autorizado (si está configurado)
+        if (TELEGRAM_CHAT_ID && String(chatId) !== String(TELEGRAM_CHAT_ID)) {
+            console.warn(`⚠️ Mensaje de chat no autorizado: ${chatId}`);
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ ok: true, message: 'Chat no autorizado' })
+            };
+        }
+        
+        // Verificar que sea un comando (empieza con /)
+        if (!text.startsWith('/')) {
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ ok: true, message: 'No es un comando' })
+            };
+        }
+        
+        // Extraer el comando (puede tener parámetros)
+        const comando = text.split(' ')[0].toLowerCase();
+        
+        console.log(`📱 Comando recibido: ${comando} de chat ${chatId}`);
+        
+        // Procesar el comando
+        await procesarComandoTelegram(comando, chatId, messageId);
+        
+        return {
+            statusCode: 200,
+            body: JSON.stringify({ ok: true })
+        };
+        
+    } catch (error) {
+        console.error(`❌ Error procesando comando Telegram: ${error.message}`);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ ok: false, error: error.message })
+        };
+    }
+};
+
+/**
  * Handler principal de Lambda
- * Se ejecuta cuando CloudWatch Events dispara la función
+ * Detecta el tipo de evento y ejecuta el handler correspondiente
  */
 export const handler = async (event, context) => {
+    // Detectar si es un webhook de Telegram (tiene body.message)
+    if (event.body && (typeof event.body === 'string' ? JSON.parse(event.body) : event.body).message) {
+        return await telegramHandler(event, context);
+    }
+    
+    // Si no es Telegram, es el evento programado de CloudWatch
+    return await cloudWatchHandler(event, context);
+};
+
+/**
+ * Handler para eventos programados de CloudWatch
+ * Se ejecuta cuando CloudWatch Events dispara la función
+ */
+async function cloudWatchHandler(event, context) {
     const ahora = obtenerHoraColombia();
     const horaFormato = formatearHoraAMPM(ahora);
     const horaActual = ahora.getHours();
@@ -565,20 +894,45 @@ export const handler = async (event, context) => {
     
     // Verificar si estamos en horario laboral
     if (!(await estaEnHorarioLaboral())) {
-        // Si es después de las 5pm (17:00) en día laboral, establecer estado como ausente
         const diaSemana = ahora.getDay();
         const esDiaLaboral = diaSemana !== 0 && diaSemana !== 6; // Lunes a Viernes
         const esDiaFestivo = await esDiaFestivo(ahora);
+        const esHorarioAlmuerzo = horaActual >= HORA_ALMUERZO_INICIO && horaActual < HORA_ALMUERZO_FIN;
+        const esDespuesHorarioLaboral = horaActual >= HORA_FIN;
         
-        if (horaActual >= HORA_FIN && esDiaLaboral && !esDiaFestivo) {
+        // Si es horario de almuerzo (1pm-2pm) en día laboral, establecer estado como ausente
+        if (esHorarioAlmuerzo && esDiaLaboral && !esDiaFestivo) {
+            console.log(`🍽️ Horario de almuerzo (${horaFormato}) - Estableciendo estado AUSENTE`);
+            
+            const estadoAntes = await obtenerEstadoSlack();
+            
+            if (await establecerEstadoAusente()) {
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const estadoDespues = await obtenerEstadoSlack();
+                
+                console.log(`✅ Estado establecido como AUSENTE durante almuerzo (${horaFormato})`);
+                
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({
+                        message: 'Estado establecido como ausente (almuerzo)',
+                        hora: horaFormato,
+                        estado_antes: estadoAntes,
+                        estado_despues: estadoDespues,
+                        accion: 'establecido_ausente_almuerzo'
+                    })
+                };
+            }
+        }
+        
+        // Si es después de las 5pm (17:00) en día laboral, establecer estado como ausente
+        if (esDespuesHorarioLaboral && esDiaLaboral && !esDiaFestivo) {
             console.log(`🏠 Fuera de horario laboral (${horaFormato}) - Estableciendo estado AUSENTE`);
             
             const estadoAntes = await obtenerEstadoSlack();
             
             if (await establecerEstadoAusente()) {
-                // Esperar un poco para que Slack procese
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                
                 const estadoDespues = await obtenerEstadoSlack();
                 
                 console.log(`✅ Estado establecido como AUSENTE (${horaFormato})`);

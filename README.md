@@ -5,10 +5,13 @@ Mantén tu estado de Slack siempre activo usando AWS Lambda con notificaciones p
 ## ✨ Características
 
 - ✅ Mantiene tu estado de Slack como "active" automáticamente
+- ✅ **Comandos interactivos de Telegram** para controlar el estado manualmente
 - ✅ Notificaciones por Telegram cuando detecta ausente
 - ✅ Notificaciones en momentos clave (inicio, almuerzo, vuelta, fin)
 - ✅ Respeta días festivos de Colombia (consulta API automática)
-- ✅ Horario laboral configurable (8am-5pm, excepto 1pm-2pm)
+- ✅ Horario laboral configurable desde variables de entorno o Telegram
+- ✅ **Estado ausente automático durante el almuerzo (1pm-2pm)** y vuelta a activo a las 2pm
+- ✅ Establece estado ausente automáticamente a las 5pm
 - ✅ Alertas de errores cuando el token expira o hay problemas
 - ✅ Logs optimizados y formato de hora AM/PM
 
@@ -42,7 +45,9 @@ Mantén tu estado de Slack siempre activo usando AWS Lambda con notificaciones p
 
 ## 📖 Documentación Completa
 
-Ver `INSTRUCCIONES_LAMBDA.md` para instrucciones detalladas paso a paso.
+- **Instalación:** Ver `INSTRUCCIONES_LAMBDA.md` para instrucciones detalladas paso a paso
+- **Comandos de Telegram:** Ver `TELEGRAM_COMMANDS.md` para configurar y usar comandos interactivos
+- **Despliegue automático:** Ver `DEPLOY.md` para configurar GitHub Actions
 
 ## 🔔 Notificaciones
 
@@ -57,12 +62,26 @@ Ver `INSTRUCCIONES_LAMBDA.md` para instrucciones detalladas paso a paso.
 - Token expirado o inválido
 - Errores de conexión
 
+### Comandos de Telegram:
+- `/status` - Ver estado actual de Slack
+- `/setactive` - Establecer estado ACTIVO manualmente
+- `/setaway` - Establecer estado AUSENTE manualmente
+- `/horario` - Ver horario laboral configurado
+- `/sethorario` - Configurar nuevos horarios desde Telegram
+- `/info` - Ver información del sistema
+- `/test` - Probar conexión con Slack
+- `/help` - Ver todos los comandos disponibles
+
+Ver `TELEGRAM_COMMANDS.md` para más detalles sobre cómo configurar los comandos.
+
 ## ⚙️ Configuración
 
-### Horarios (editar en código):
-- Inicio: 8:00 AM
-- Fin: 5:00 PM
-- Almuerzo: 1:00 PM - 2:00 PM
+### Horarios (configurables):
+- **Por defecto:** Inicio 8:00 AM, Fin 5:00 PM, Almuerzo 1:00 PM - 2:00 PM
+- **Configuración:** Puedes cambiar los horarios desde:
+  - Variables de entorno en AWS Lambda (`HORA_INICIO`, `HORA_FIN`, `HORA_ALMUERZO_INICIO`, `HORA_ALMUERZO_FIN`)
+  - Comando `/sethorario` en Telegram (te mostrará instrucciones)
+- **Comportamiento durante almuerzo:** Automáticamente establece estado AUSENTE durante el horario de almuerzo y vuelve a ACTIVO al finalizar
 
 ### Días Festivos:
 - Se obtienen automáticamente de la API de Nager.Date
