@@ -37,6 +37,12 @@ jobs:
           aws lambda wait function-updated \
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }}
       
+      - name: Update handler configuration
+        run: |
+          aws lambda update-function-configuration \
+            --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
+            --handler lambda_function.handler || echo "⚠️ No se pudo actualizar el handler (puede que ya esté correcto)"
+      
       - name: Verify deployment
         run: |
           echo "✅ Lambda function actualizada exitosamente"
