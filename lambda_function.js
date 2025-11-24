@@ -1231,78 +1231,89 @@ async function cloudWatchHandler(event, context) {
     const ahora = obtenerHoraColombia();
     const horaFormato = formatearHoraAMPM(ahora);
     const horaActual = ahora.getHours();
+    const diaSemana = ahora.getDay();
+    const esDiaLaboral = diaSemana !== 0 && diaSemana !== 6; // Lunes a Viernes
+    const esDiaFestivo = await esDiaFestivo(ahora);
+    const esHorarioAlmuerzo = horaActual >= HORA_ALMUERZO_INICIO && horaActual < HORA_ALMUERZO_FIN;
+    const esDespuesHorarioLaboral = horaActual >= HORA_FIN;
+    const esAntesHorarioLaboral = horaActual < HORA_INICIO;
     
     // Verificar momentos clave y enviar notificaciones
     await verificarMomentosClave(ahora);
     
-    // Verificar si estamos en horario laboral
-    if (!(await estaEnHorarioLaboral())) {
-        const diaSemana = ahora.getDay();
-        const esDiaLaboral = diaSemana !== 0 && diaSemana !== 6; // Lunes a Viernes
-        const esDiaFestivo = await esDiaFestivo(ahora);
-        const esHorarioAlmuerzo = horaActual >= HORA_ALMUERZO_INICIO && horaActual < HORA_ALMUERZO_FIN;
-        const esDespuesHorarioLaboral = horaActual >= HORA_FIN;
+    // CASO 1: Horario de almuerzo (1pm-2pm) en día laboral - Establecer AUSENTE
+    if (esHorarioAlmuerzo && esDiaLaboral && !esDiaFestivo) {
+        console.log(`🍽️ Horario de almuerzo (${horaFormato}) - Estableciendo estado AUSENTE`);
         
-        // Si es horario de almuerzo (1pm-2pm) en día laboral, establecer estado como ausente
-        if (esHorarioAlmuerzo && esDiaLaboral && !esDiaFestivo) {
-            console.log(`🍽️ Horario de almuerzo (${horaFormato}) - Estableciendo estado AUSENTE`);
+        const estadoAntes = await obtenerEstadoSlack();
+        
+        if (await establecerEstadoAusente()) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const estadoDespues = await obtenerEstadoSlack();
             
-            const estadoAntes = await obtenerEstadoSlack();
+            console.log(`✅ Estado establecido como AUSENTE durante almuerzo (${horaFormato})`);
             
-            if (await establecerEstadoAusente()) {
-                await new Promise(resolve => setTimeout(resolve, 1500));
-                const estadoDespues = await obtenerEstadoSlack();
-                
-                console.log(`✅ Estado establecido como AUSENTE durante almuerzo (${horaFormato})`);
-                
-                return {
-                    statusCode: 200,
-                    body: JSON.stringify({
-                        message: 'Estado establecido como ausente (almuerzo)',
-                        hora: horaFormato,
-                        estado_antes: estadoAntes,
-                        estado_despues: estadoDespues,
-                        accion: 'establecido_ausente_almuerzo'
-                    })
-                };
-            }
+            return {
+                statusCode: 200,
+                body: JSON.stringify({
+                    message: 'Estado establecido como ausente (almuerzo)',
+                    hora: horaFormato,
+                    estado_antes: estadoAntes,
+                    estado_despues: estadoDespues,
+                    accion: 'establecido_ausente_almuerzo'
+                })
+            };
+        } else {
+            console.error(`❌ Error al establecer estado AUSENTE durante almuerzo (${horaFormato})`);
+            return {
+                statusCode: 500,
+                body: JSON.stringify({
+                    message: 'Error al establecer estado ausente (almuerzo)',
+                    hora: horaFormato,
+                    estado_antes: estadoAntes,
+                    accion: 'error_almuerzo'
+                })
+            };
         }
+    }
+    
+    // CASO 2: Después de las 5pm (17:00) en día laboral - Establecer AUSENTE
+    if (esDespuesHorarioLaboral && esDiaLaboral && !esDiaFestivo) {
+        console.log(`🏠 Fuera de horario laboral (${horaFormato}) - Estableciendo estado AUSENTE`);
         
-        // Si es después de las 5pm (17:00) en día laboral, establecer estado como ausente
-        if (esDespuesHorarioLaboral && esDiaLaboral && !esDiaFestivo) {
-            console.log(`🏠 Fuera de horario laboral (${horaFormato}) - Estableciendo estado AUSENTE`);
+        const estadoAntes = await obtenerEstadoSlack();
+        
+        if (await establecerEstadoAusente()) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const estadoDespues = await obtenerEstadoSlack();
             
-            const estadoAntes = await obtenerEstadoSlack();
+            console.log(`✅ Estado establecido como AUSENTE (${horaFormato})`);
             
-            if (await establecerEstadoAusente()) {
-                await new Promise(resolve => setTimeout(resolve, 1500));
-                const estadoDespues = await obtenerEstadoSlack();
-                
-                console.log(`✅ Estado establecido como AUSENTE (${horaFormato})`);
-                
-                return {
-                    statusCode: 200,
-                    body: JSON.stringify({
-                        message: 'Estado establecido como ausente',
-                        hora: horaFormato,
-                        estado_antes: estadoAntes,
-                        estado_despues: estadoDespues,
-                        accion: 'establecido_ausente'
-                    })
-                };
-            } else {
-                console.error('❌ Error al establecer estado AUSENTE');
-                return {
-                    statusCode: 500,
-                    body: JSON.stringify({
-                        message: 'Error al establecer estado ausente',
-                        hora: horaFormato,
-                        accion: 'error'
-                    })
-                };
-            }
+            return {
+                statusCode: 200,
+                body: JSON.stringify({
+                    message: 'Estado establecido como ausente',
+                    hora: horaFormato,
+                    estado_antes: estadoAntes,
+                    estado_despues: estadoDespues,
+                    accion: 'establecido_ausente'
+                })
+            };
+        } else {
+            console.error('❌ Error al establecer estado AUSENTE');
+            return {
+                statusCode: 500,
+                body: JSON.stringify({
+                    message: 'Error al establecer estado ausente',
+                    hora: horaFormato,
+                    accion: 'error'
+                })
+            };
         }
-        
+    }
+    
+    // CASO 3: Fuera de horario laboral (fines de semana, días festivos, antes de las 8am)
+    if (!esDiaLaboral || esDiaFestivo || esAntesHorarioLaboral) {
         console.log(`⏸️ Fuera de horario laboral (${horaFormato})`);
         return {
             statusCode: 200,
@@ -1314,13 +1325,21 @@ async function cloudWatchHandler(event, context) {
         };
     }
     
-    console.log(`✅ Horario laboral (${horaFormato}) - Verificando estado...`);
+    // CASO 4: En horario laboral (incluye regreso del almuerzo a las 2pm) - Establecer ACTIVO
+    // Verificar si acabamos de regresar del almuerzo (hora exacta de fin de almuerzo)
+    const esRegresoAlmuerzo = horaActual === HORA_ALMUERZO_FIN;
+    
+    if (esRegresoAlmuerzo) {
+        console.log(`⏰ Regreso del almuerzo (${horaFormato}) - Estableciendo estado ACTIVO`);
+    } else {
+        console.log(`✅ Horario laboral (${horaFormato}) - Verificando estado...`);
+    }
     
     // Obtener estado actual
     const estadoAntes = await obtenerEstadoSlack();
     
-    // Si está ausente, enviar notificación a Telegram
-    if (estadoAntes === 'away') {
+    // Si está ausente, enviar notificación a Telegram (excepto si acabamos de regresar del almuerzo)
+    if (estadoAntes === 'away' && !esRegresoAlmuerzo) {
         const fechaFormato = formatearFecha(ahora);
         const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
         const nombreDia = diasSemana[ahora.getDay()];
@@ -1342,23 +1361,33 @@ async function cloudWatchHandler(event, context) {
         // Verificar estado después
         const estadoDespues = await obtenerEstadoSlack();
         
-        // Solo mostrar logs importantes
-        if (estadoAntes === 'away' && estadoDespues === 'active') {
-            console.log('✅ Estado corregido: AUSENTE → ACTIVO');
-        } else if (estadoDespues === 'active') {
-            console.log('✅ Estado: ACTIVO');
-        } else if (estadoDespues === 'away') {
-            console.warn('⚠️ Estado sigue AUSENTE - Slack requiere sesión activa');
+        // Mostrar logs según el caso
+        if (esRegresoAlmuerzo) {
+            if (estadoAntes === 'away' && estadoDespues === 'active') {
+                console.log(`✅ Regreso del almuerzo: Estado cambiado AUSENTE → ACTIVO (${horaFormato})`);
+            } else if (estadoDespues === 'active') {
+                console.log(`✅ Regreso del almuerzo: Estado ACTIVO confirmado (${horaFormato})`);
+            } else {
+                console.warn(`⚠️ Regreso del almuerzo: Estado sigue AUSENTE (${horaFormato})`);
+            }
+        } else {
+            if (estadoAntes === 'away' && estadoDespues === 'active') {
+                console.log('✅ Estado corregido: AUSENTE → ACTIVO');
+            } else if (estadoDespues === 'active') {
+                console.log('✅ Estado: ACTIVO');
+            } else if (estadoDespues === 'away') {
+                console.warn('⚠️ Estado sigue AUSENTE - Slack requiere sesión activa');
+            }
         }
         
         return {
             statusCode: 200,
             body: JSON.stringify({
-                message: 'Estado actualizado exitosamente',
+                message: esRegresoAlmuerzo ? 'Estado establecido como activo (regreso del almuerzo)' : 'Estado actualizado exitosamente',
                 hora: horaFormato,
                 estado_antes: estadoAntes,
                 estado_despues: estadoDespues,
-                accion: 'establecido_activo'
+                accion: esRegresoAlmuerzo ? 'establecido_activo_regreso_almuerzo' : 'establecido_activo'
             })
         };
     } else {
