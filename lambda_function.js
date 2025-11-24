@@ -386,6 +386,46 @@ async function establecerEstadoActivo() {
 }
 
 /**
+ * Establece el estado de Slack como 'away' (ausente)
+ * Returns: True si fue exitoso, False en caso contrario
+ */
+async function establecerEstadoAusente() {
+    if (!SLACK_TOKEN) {
+        console.error('ERROR: SLACK_TOKEN no configurado');
+        return false;
+    }
+    
+    try {
+        const response = await hacerPeticionSlack('users.setPresence', {
+            presence: 'away'
+        });
+        
+        if (response.ok) {
+            return true;
+        } else {
+            const errorMsg = response.error || 'unknown';
+            const needed = response.needed || '';
+            
+            // Si es error crítico, ya se notificó en obtenerEstadoSlack, solo loguear
+            if (esErrorCritico(errorMsg)) {
+                if (errorMsg === 'missing_scope') {
+                    console.error(`❌ ERROR: Token sin permiso necesario: ${needed}`);
+                } else {
+                    console.error(`❌ Error crítico al establecer estado ausente: ${errorMsg}`);
+                }
+            } else {
+                console.error(`❌ Error al establecer estado ausente: ${errorMsg}`);
+            }
+            
+            return false;
+        }
+    } catch (error) {
+        console.error(`❌ Error de conexión: ${error.message}`);
+        return false;
+    }
+}
+
+/**
  * Envía un mensaje a Telegram
  */
 async function enviarNotificacionTelegram(mensaje) {
@@ -518,12 +558,54 @@ async function verificarMomentosClave(fecha) {
 export const handler = async (event, context) => {
     const ahora = obtenerHoraColombia();
     const horaFormato = formatearHoraAMPM(ahora);
+    const horaActual = ahora.getHours();
     
     // Verificar momentos clave y enviar notificaciones
     await verificarMomentosClave(ahora);
     
     // Verificar si estamos en horario laboral
     if (!(await estaEnHorarioLaboral())) {
+        // Si es después de las 5pm (17:00) en día laboral, establecer estado como ausente
+        const diaSemana = ahora.getDay();
+        const esDiaLaboral = diaSemana !== 0 && diaSemana !== 6; // Lunes a Viernes
+        const esDiaFestivo = await esDiaFestivo(ahora);
+        
+        if (horaActual >= HORA_FIN && esDiaLaboral && !esDiaFestivo) {
+            console.log(`🏠 Fuera de horario laboral (${horaFormato}) - Estableciendo estado AUSENTE`);
+            
+            const estadoAntes = await obtenerEstadoSlack();
+            
+            if (await establecerEstadoAusente()) {
+                // Esperar un poco para que Slack procese
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                
+                const estadoDespues = await obtenerEstadoSlack();
+                
+                console.log(`✅ Estado establecido como AUSENTE (${horaFormato})`);
+                
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({
+                        message: 'Estado establecido como ausente',
+                        hora: horaFormato,
+                        estado_antes: estadoAntes,
+                        estado_despues: estadoDespues,
+                        accion: 'establecido_ausente'
+                    })
+                };
+            } else {
+                console.error('❌ Error al establecer estado AUSENTE');
+                return {
+                    statusCode: 500,
+                    body: JSON.stringify({
+                        message: 'Error al establecer estado ausente',
+                        hora: horaFormato,
+                        accion: 'error'
+                    })
+                };
+            }
+        }
+        
         console.log(`⏸️ Fuera de horario laboral (${horaFormato})`);
         return {
             statusCode: 200,
