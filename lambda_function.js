@@ -1231,100 +1231,87 @@ async function cloudWatchHandler(event, context) {
     const ahora = obtenerHoraColombia();
     const horaFormato = formatearHoraAMPM(ahora);
     const horaActual = ahora.getHours();
-    const diaSemana = ahora.getDay();
-    const esDiaLaboral = diaSemana !== 0 && diaSemana !== 6; // Lunes a Viernes
-    const esDiaFestivo = await esDiaFestivo(ahora);
-    const esHorarioAlmuerzo = horaActual >= HORA_ALMUERZO_INICIO && horaActual < HORA_ALMUERZO_FIN;
-    const esDespuesHorarioLaboral = horaActual >= HORA_FIN;
-    const esAntesHorarioLaboral = horaActual < HORA_INICIO;
     
     // Verificar momentos clave y enviar notificaciones
     await verificarMomentosClave(ahora);
     
-    // PRIMERO: Obtener estado actual de Slack (SIEMPRE verificar primero)
-    const estadoAntes = await obtenerEstadoSlack();
-    console.log(`🔍 Estado actual de Slack: ${estadoAntes}`);
-    
-    // CASO 1: Fuera de horario laboral (fines de semana, días festivos, antes de las 8am)
-    if (!esDiaLaboral || esDiaFestivo || esAntesHorarioLaboral) {
+    // Verificar si estamos en horario laboral
+    if (!(await estaEnHorarioLaboral())) {
+        const diaSemana = ahora.getDay();
+        const esDiaLaboral = diaSemana !== 0 && diaSemana !== 6; // Lunes a Viernes
+        const esDiaFestivo = await esDiaFestivo(ahora);
+        const esHorarioAlmuerzo = horaActual >= HORA_ALMUERZO_INICIO && horaActual < HORA_ALMUERZO_FIN;
+        const esDespuesHorarioLaboral = horaActual >= HORA_FIN;
+        
+        // Si es horario de almuerzo (1pm-2pm) en día laboral, establecer estado como ausente
+        if (esHorarioAlmuerzo && esDiaLaboral && !esDiaFestivo) {
+            console.log(`🍽️ Horario de almuerzo (${horaFormato}) - Estableciendo estado AUSENTE`);
+            
+            const estadoAntes = await obtenerEstadoSlack();
+            
+            if (await establecerEstadoAusente()) {
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const estadoDespues = await obtenerEstadoSlack();
+                
+                console.log(`✅ Estado establecido como AUSENTE durante almuerzo (${horaFormato})`);
+                
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({
+                        message: 'Estado establecido como ausente (almuerzo)',
+                        hora: horaFormato,
+                        estado_antes: estadoAntes,
+                        estado_despues: estadoDespues,
+                        accion: 'establecido_ausente_almuerzo'
+                    })
+                };
+            }
+        }
+        
+        // Si es después de las 5pm (17:00) en día laboral, establecer estado como ausente
+        if (esDespuesHorarioLaboral && esDiaLaboral && !esDiaFestivo) {
+            console.log(`🏠 Fuera de horario laboral (${horaFormato}) - Estableciendo estado AUSENTE`);
+            
+            const estadoAntes = await obtenerEstadoSlack();
+            
+            if (await establecerEstadoAusente()) {
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const estadoDespues = await obtenerEstadoSlack();
+                
+                console.log(`✅ Estado establecido como AUSENTE (${horaFormato})`);
+                
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({
+                        message: 'Estado establecido como ausente',
+                        hora: horaFormato,
+                        estado_antes: estadoAntes,
+                        estado_despues: estadoDespues,
+                        accion: 'establecido_ausente'
+                    })
+                };
+            } else {
+                console.error('❌ Error al establecer estado AUSENTE');
+                return {
+                    statusCode: 500,
+                    body: JSON.stringify({
+                        message: 'Error al establecer estado ausente',
+                        hora: horaFormato,
+                        accion: 'error'
+                    })
+                };
+            }
+        }
+        
         console.log(`⏸️ Fuera de horario laboral (${horaFormato})`);
         return {
             statusCode: 200,
             body: JSON.stringify({
                 message: 'Fuera de horario laboral',
                 hora: horaFormato,
-                estado_actual: estadoAntes,
                 accion: 'ninguna'
             })
         };
-    }
-    
-    // CASO 2: Horario de almuerzo (1pm-2pm) en día laboral - Establecer AUSENTE
-    if (esHorarioAlmuerzo && esDiaLaboral && !esDiaFestivo) {
-        console.log(`🍽️ Horario de almuerzo (${horaFormato}) - Estableciendo estado AUSENTE`);
-        
-        if (await establecerEstadoAusente()) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            const estadoDespues = await obtenerEstadoSlack();
-            
-            console.log(`✅ Estado establecido como AUSENTE durante almuerzo (${horaFormato})`);
-            
-            return {
-                statusCode: 200,
-                body: JSON.stringify({
-                    message: 'Estado establecido como ausente (almuerzo)',
-                    hora: horaFormato,
-                    estado_antes: estadoAntes,
-                    estado_despues: estadoDespues,
-                    accion: 'establecido_ausente_almuerzo'
-                })
-            };
-        } else {
-            console.error(`❌ Error al establecer estado AUSENTE durante almuerzo (${horaFormato})`);
-            return {
-                statusCode: 500,
-                body: JSON.stringify({
-                    message: 'Error al establecer estado ausente (almuerzo)',
-                    hora: horaFormato,
-                    estado_antes: estadoAntes,
-                    accion: 'error_almuerzo'
-                })
-            };
-        }
-    }
-    
-    // CASO 3: Después de las 5pm (17:00) en día laboral - Establecer AUSENTE
-    if (esDespuesHorarioLaboral && esDiaLaboral && !esDiaFestivo) {
-        console.log(`🏠 Fuera de horario laboral (${horaFormato}) - Estableciendo estado AUSENTE`);
-        
-        if (await establecerEstadoAusente()) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            const estadoDespues = await obtenerEstadoSlack();
-            
-            console.log(`✅ Estado establecido como AUSENTE (${horaFormato})`);
-            
-            return {
-                statusCode: 200,
-                body: JSON.stringify({
-                    message: 'Estado establecido como ausente',
-                    hora: horaFormato,
-                    estado_antes: estadoAntes,
-                    estado_despues: estadoDespues,
-                    accion: 'establecido_ausente'
-                })
-            };
-        } else {
-            console.error('❌ Error al establecer estado AUSENTE');
-            return {
-                statusCode: 500,
-                body: JSON.stringify({
-                    message: 'Error al establecer estado ausente',
-                    hora: horaFormato,
-                    estado_antes: estadoAntes,
-                    accion: 'error'
-                })
-            };
-        }
     }
     
     // CASO 4: En horario laboral (8am-5pm, excepto almuerzo) - Verificar y establecer ACTIVO
@@ -1333,6 +1320,10 @@ async function cloudWatchHandler(event, context) {
     const esRegresoAlmuerzo = horaActual === HORA_ALMUERZO_FIN && minutosActuales < 5; // Primeros 5 minutos después de las 2pm
     
     console.log(`✅ Horario laboral (${horaFormato}) - Verificando estado...`);
+    
+    // Obtener estado actual
+    const estadoAntes = await obtenerEstadoSlack();
+    console.log(`🔍 Estado actual de Slack: ${estadoAntes}`);
     
     // DETECCIÓN DE AUSENTE: Si está ausente durante horario laboral, enviar notificación INMEDIATAMENTE
     if (estadoAntes === 'away') {
