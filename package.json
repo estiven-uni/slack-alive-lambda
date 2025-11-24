@@ -1,6 +1,7 @@
 {
   "name": "slack-alive-lambda",
   "version": "1.0.0",
+  "type": "module",
   "description": "Lambda function para mantener Slack activo con notificaciones Telegram",
   "main": "lambda_function.js",
   "scripts": {
