@@ -5,12 +5,18 @@
  */
 
 import https from 'https';
+import { LambdaClient, UpdateFunctionConfigurationCommand, GetFunctionConfigurationCommand } from '@aws-sdk/client-lambda';
 
 // Configuración
 const SLACK_TOKEN = process.env.SLACK_TOKEN;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TIMEZONE_COLOMBIA = 'America/Bogota';
+const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
+const AWS_REGION = process.env.AWS_REGION || 'us-east-2';
+
+// Cliente de AWS Lambda
+const lambdaClient = new LambdaClient({ region: AWS_REGION });
 
 // Horarios de trabajo configurables desde variables de entorno (hora de Colombia)
 // Valores por defecto si no están configurados
@@ -938,6 +944,41 @@ async function procesarCallbackConfiguracion(callbackData, chatId, messageId) {
 }
 
 /**
+ * Actualiza una variable de entorno en Lambda
+ */
+async function actualizarVariableEntorno(nombreVariable, valor) {
+    try {
+        // Obtener la configuración actual
+        const getCommand = new GetFunctionConfigurationCommand({
+            FunctionName: FUNCTION_NAME
+        });
+        
+        const currentConfig = await lambdaClient.send(getCommand);
+        
+        // Crear nueva configuración con la variable actualizada
+        const nuevasVariables = {
+            ...currentConfig.Environment.Variables,
+            [nombreVariable]: String(valor)
+        };
+        
+        // Actualizar la función con las nuevas variables
+        const updateCommand = new UpdateFunctionConfigurationCommand({
+            FunctionName: FUNCTION_NAME,
+            Environment: {
+                Variables: nuevasVariables
+            }
+        });
+        
+        await lambdaClient.send(updateCommand);
+        
+        return { success: true };
+    } catch (error) {
+        console.error(`Error actualizando variable de entorno: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
  * Procesa la selección de hora
  */
 async function procesarSeleccionHora(callbackData, chatId, messageId) {
@@ -962,22 +1003,43 @@ async function procesarSeleccionHora(callbackData, chatId, messageId) {
     
     const horaFormato = hora < 12 ? `${hora === 0 ? 12 : hora}:00 AM` : hora === 12 ? '12:00 PM' : `${hora - 12}:00 PM`;
     
+    // Mostrar mensaje de procesando
     await enviarNotificacionTelegram(
-        `✅ <b>${titulos[tipo]} Configurado</b>\n\n` +
+        `⏳ <b>Actualizando ${titulos[tipo]}...</b>\n\n` +
         `Nueva hora: <b>${horaFormato}</b>\n\n` +
-        `📝 <b>Para aplicar este cambio:</b>\n\n` +
-        `1. Ve a AWS Lambda Console\n` +
-        `2. Selecciona tu función "slack-alive"\n` +
-        `3. Ve a <b>Configuration → Environment variables</b>\n` +
-        `4. Haz clic en <b>Edit</b>\n` +
-        `5. Busca la variable <code>${variables[tipo]}</code>\n` +
-        `6. Cámbiala a: <code>${hora}</code>\n` +
-        `7. Haz clic en <b>Save</b>\n\n` +
-        `💡 <i>El cambio se aplicará automáticamente en la próxima ejecución del Lambda.</i>\n\n` +
-        `🔄 Usa /horario para ver la configuración actual`,
+        `Por favor espera unos segundos...`,
         chatId,
         messageId
     );
+    
+    // Actualizar la variable de entorno automáticamente
+    const resultado = await actualizarVariableEntorno(variables[tipo], hora);
+    
+    if (resultado.success) {
+        await enviarNotificacionTelegram(
+            `✅ <b>${titulos[tipo]} Actualizado Automáticamente</b>\n\n` +
+            `Nueva hora: <b>${horaFormato}</b>\n\n` +
+            `🎉 ¡El cambio se aplicó automáticamente!\n` +
+            `El nuevo horario estará activo en la próxima ejecución del Lambda (máximo 1 minuto).\n\n` +
+            `🔄 Usa /horario para ver la configuración actualizada`,
+            chatId,
+            messageId
+        );
+    } else {
+        await enviarNotificacionTelegram(
+            `❌ <b>Error al actualizar automáticamente</b>\n\n` +
+            `No se pudo actualizar la variable de entorno automáticamente.\n` +
+            `Error: ${resultado.error}\n\n` +
+            `📝 <b>Actualización manual requerida:</b>\n` +
+            `1. Ve a AWS Lambda Console\n` +
+            `2. Selecciona tu función "slack-alive"\n` +
+            `3. Ve a Configuration → Environment variables\n` +
+            `4. Edita <code>${variables[tipo]}</code> a <code>${hora}</code>\n` +
+            `5. Guarda los cambios`,
+            chatId,
+            messageId
+        );
+    }
     
     return {
         statusCode: 200,
