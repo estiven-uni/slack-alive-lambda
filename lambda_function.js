@@ -877,6 +877,115 @@ async function responderCallback(callbackId) {
 }
 
 /**
+ * Procesa callback de configuración de horarios (muestra selector de horas)
+ */
+async function procesarCallbackConfiguracion(callbackData, chatId, messageId) {
+    const tipo = callbackData.replace('config_', '');
+    
+    const titulos = {
+        'inicio': '🌅 Hora de Entrada',
+        'fin': '🏠 Hora de Salida',
+        'almuerzo_inicio': '🍽️ Inicio de Almuerzo',
+        'almuerzo_fin': '⏰ Fin de Almuerzo'
+    };
+    
+    const valorActual = {
+        'inicio': HORA_INICIO,
+        'fin': HORA_FIN,
+        'almuerzo_inicio': HORA_ALMUERZO_INICIO,
+        'almuerzo_fin': HORA_ALMUERZO_FIN
+    };
+    
+    // Crear teclado con horas (0-23)
+    const teclado = [];
+    
+    // Crear filas de 6 botones cada una
+    for (let fila = 0; fila < 4; fila++) {
+        const filaButtons = [];
+        for (let col = 0; col < 6; col++) {
+            const hora = fila * 6 + col;
+            if (hora <= 23) {
+                const horaStr = String(hora).padStart(2, '0') + ':00';
+                const esActual = hora === valorActual[tipo];
+                filaButtons.push({
+                    text: esActual ? `✅ ${horaStr}` : horaStr,
+                    callback_data: `set_hour_${tipo}_${hora}`
+                });
+            }
+        }
+        if (filaButtons.length > 0) {
+            teclado.push(filaButtons);
+        }
+    }
+    
+    // Botón para cancelar
+    teclado.push([{ text: '❌ Cancelar', callback_data: 'cancelar_config' }]);
+    
+    await enviarNotificacionTelegram(
+        `⚙️ <b>${titulos[tipo]}</b>\n\n` +
+        `Valor actual: <b>${valorActual[tipo]}:00 ${valorActual[tipo] < 12 ? 'AM' : 'PM'}</b>\n\n` +
+        `Selecciona la nueva hora:`,
+        chatId,
+        messageId,
+        null,
+        teclado
+    );
+    
+    return {
+        statusCode: 200,
+        body: JSON.stringify({ ok: true })
+    };
+}
+
+/**
+ * Procesa la selección de hora
+ */
+async function procesarSeleccionHora(callbackData, chatId, messageId) {
+    // Formato: set_hour_tipo_hora
+    const partes = callbackData.split('_');
+    const hora = parseInt(partes[partes.length - 1]);
+    const tipo = partes.slice(2, -1).join('_');
+    
+    const titulos = {
+        'inicio': 'Hora de Entrada',
+        'fin': 'Hora de Salida',
+        'almuerzo_inicio': 'Inicio de Almuerzo',
+        'almuerzo_fin': 'Fin de Almuerzo'
+    };
+    
+    const variables = {
+        'inicio': 'HORA_INICIO',
+        'fin': 'HORA_FIN',
+        'almuerzo_inicio': 'HORA_ALMUERZO_INICIO',
+        'almuerzo_fin': 'HORA_ALMUERZO_FIN'
+    };
+    
+    const horaFormato = hora < 12 ? `${hora === 0 ? 12 : hora}:00 AM` : hora === 12 ? '12:00 PM' : `${hora - 12}:00 PM`;
+    
+    await enviarNotificacionTelegram(
+        `✅ <b>${titulos[tipo]} Configurado</b>\n\n` +
+        `Nueva hora: <b>${horaFormato}</b>\n\n` +
+        `📝 <b>Para aplicar este cambio:</b>\n\n` +
+        `1. Ve a AWS Lambda Console\n` +
+        `2. Selecciona tu función "slack-alive"\n` +
+        `3. Ve a <b>Configuration → Environment variables</b>\n` +
+        `4. Haz clic en <b>Edit</b>\n` +
+        `5. Busca la variable <code>${variables[tipo]}</code>\n` +
+        `6. Cámbiala a: <code>${hora}</code>\n` +
+        `7. Haz clic en <b>Save</b>\n\n` +
+        `💡 <i>El cambio se aplicará automáticamente en la próxima ejecución del Lambda.</i>\n\n` +
+        `🔄 Usa /horario para ver la configuración actual`,
+        chatId,
+        messageId
+    );
+    
+    return {
+        statusCode: 200,
+        body: JSON.stringify({ ok: true })
+    };
+}
+
+/**
  * Procesa comandos de Telegram y mensajes de texto
  */
 async function procesarComandoTelegram(comando, chatId, messageId, esTexto = false, textoCompleto = '') {
@@ -1049,78 +1158,33 @@ async function procesarComandoTelegram(comando, chatId, messageId, esTexto = fal
             );
         
         case '/sethorario':
-            // Parsear parámetros del comando
-            // Formato: /sethorario inicio=8 fin=17 almuerzo_inicio=13 almuerzo_fin=14
-            const partes = textoCompleto.split(' ').slice(1);
-            const parametros = {};
+            // Mostrar menú interactivo para configurar horarios
+            const tecladoHorarios = [
+                [
+                    { text: '🌅 Hora de Entrada', callback_data: 'config_inicio' },
+                    { text: '🏠 Hora de Salida', callback_data: 'config_fin' }
+                ],
+                [
+                    { text: '🍽️ Inicio Almuerzo', callback_data: 'config_almuerzo_inicio' },
+                    { text: '⏰ Fin Almuerzo', callback_data: 'config_almuerzo_fin' }
+                ],
+                [
+                    { text: '📋 Ver Configuración Actual', callback_data: 'ver_config_actual' }
+                ]
+            ];
             
-            partes.forEach(parte => {
-                const [key, value] = parte.split('=');
-                if (key && value) {
-                    parametros[key.toLowerCase()] = parseInt(value);
-                }
-            });
-            
-            if (Object.keys(parametros).length === 0) {
-                return await enviarNotificacionTelegram(
-                    `⚙️ <b>Configurar Horarios</b>\n\n` +
-                    `<b>Formato:</b>\n` +
-                    `/sethorario inicio=8 fin=17 almuerzo_inicio=13 almuerzo_fin=14\n\n` +
-                    `<b>Parámetros:</b>\n` +
-                    `• inicio: Hora de inicio (0-23)\n` +
-                    `• fin: Hora de fin (0-23)\n` +
-                    `• almuerzo_inicio: Inicio de almuerzo (0-23)\n` +
-                    `• almuerzo_fin: Fin de almuerzo (0-23)\n\n` +
-                    `<b>Ejemplo:</b>\n` +
-                    `/sethorario inicio=9 fin=18 almuerzo_inicio=13 almuerzo_fin=14\n\n` +
-                    `<b>Horarios actuales:</b>\n` +
-                    `Inicio: ${HORA_INICIO}:00\n` +
-                    `Fin: ${HORA_FIN}:00\n` +
-                    `Almuerzo: ${HORA_ALMUERZO_INICIO}:00 - ${HORA_ALMUERZO_FIN}:00\n\n` +
-                    `⚠️ <i>Nota: Los cambios se aplicarán después de actualizar las variables de entorno en AWS Lambda.</i>`,
-                    chatId,
-                    messageId
-                );
-            }
-            
-            // Validar parámetros
-            const nuevoInicio = parametros.inicio !== undefined ? parametros.inicio : HORA_INICIO;
-            const nuevoFin = parametros.fin !== undefined ? parametros.fin : HORA_FIN;
-            const nuevoAlmuerzoInicio = parametros.almuerzo_inicio !== undefined ? parametros.almuerzo_inicio : HORA_ALMUERZO_INICIO;
-            const nuevoAlmuerzoFin = parametros.almuerzo_fin !== undefined ? parametros.almuerzo_fin : HORA_ALMUERZO_FIN;
-            
-            if (nuevoInicio < 0 || nuevoInicio > 23 || nuevoFin < 0 || nuevoFin > 23 ||
-                nuevoAlmuerzoInicio < 0 || nuevoAlmuerzoInicio > 23 || nuevoAlmuerzoFin < 0 || nuevoAlmuerzoFin > 23) {
-                return await enviarNotificacionTelegram(
-                    `❌ <b>Error: Horarios inválidos</b>\n\n` +
-                    `Las horas deben estar entre 0 y 23.\n` +
-                    `Usa /sethorario para ver el formato correcto.`,
-                    chatId,
-                    messageId
-                );
-            }
-            
-            // Intentar actualizar variables de entorno usando AWS SDK
-            // Por ahora, mostrar instrucciones para actualizar manualmente
             return await enviarNotificacionTelegram(
-                `⚙️ <b>Nueva Configuración de Horarios</b>\n\n` +
-                `<b>Horarios propuestos:</b>\n` +
-                `Inicio: ${nuevoInicio}:00 ${nuevoInicio < 12 ? 'AM' : 'PM'}\n` +
-                `Fin: ${nuevoFin}:00 ${nuevoFin < 12 ? 'AM' : 'PM'}\n` +
-                `Almuerzo: ${nuevoAlmuerzoInicio}:00 ${nuevoAlmuerzoInicio < 12 ? 'AM' : 'PM'} - ${nuevoAlmuerzoFin}:00 ${nuevoAlmuerzoFin < 12 ? 'AM' : 'PM'}\n\n` +
-                `📝 <b>Para aplicar estos cambios:</b>\n` +
-                `1. Ve a AWS Lambda Console\n` +
-                `2. Selecciona tu función "slack-alive"\n` +
-                `3. Ve a Configuration → Environment variables\n` +
-                `4. Agrega/edita estas variables:\n` +
-                `   • HORA_INICIO = ${nuevoInicio}\n` +
-                `   • HORA_FIN = ${nuevoFin}\n` +
-                `   • HORA_ALMUERZO_INICIO = ${nuevoAlmuerzoInicio}\n` +
-                `   • HORA_ALMUERZO_FIN = ${nuevoAlmuerzoFin}\n` +
-                `5. Guarda los cambios\n\n` +
-                `💡 <i>Los cambios se aplicarán automáticamente en la próxima ejecución.</i>`,
+                `⚙️ <b>Configurar Horarios</b>\n\n` +
+                `Selecciona qué horario deseas configurar:\n\n` +
+                `<b>Configuración Actual:</b>\n` +
+                `🌅 Entrada: ${HORA_INICIO}:00 ${HORA_INICIO < 12 ? 'AM' : 'PM'}\n` +
+                `🏠 Salida: ${HORA_FIN}:00 ${HORA_FIN < 12 ? 'AM' : 'PM'}\n` +
+                `🍽️ Almuerzo: ${HORA_ALMUERZO_INICIO}:00 - ${HORA_ALMUERZO_FIN}:00 PM\n\n` +
+                `💡 <i>Presiona un botón para cambiar ese horario</i>`,
                 chatId,
-                messageId
+                messageId,
+                null,
+                tecladoHorarios
             );
         
         case '/test':
@@ -1188,6 +1252,39 @@ export const telegramHandler = async (event, context) => {
             
             // Responder al callback primero (para quitar el "loading" del botón)
             await responderCallback(callbackId);
+            
+            // Procesar callbacks de configuración de horarios
+            if (callbackData.startsWith('config_')) {
+                return await procesarCallbackConfiguracion(callbackData, chatId, messageId);
+            }
+            
+            if (callbackData.startsWith('set_hour_')) {
+                return await procesarSeleccionHora(callbackData, chatId, messageId);
+            }
+            
+            if (callbackData === 'ver_config_actual') {
+                await responderCallback(callbackId);
+                await procesarComandoTelegram('/horario', chatId, messageId, false, '/horario');
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({ ok: true })
+                };
+            }
+            
+            if (callbackData === 'cancelar_config') {
+                await responderCallback(callbackId);
+                await enviarNotificacionTelegram(
+                    `❌ <b>Configuración cancelada</b>\n\n` +
+                    `No se realizaron cambios.\n\n` +
+                    `Usa /sethorario para volver a configurar.`,
+                    chatId,
+                    messageId
+                );
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({ ok: true })
+                };
+            }
             
             // Procesar el callback como si fuera un comando
             const comandoMap = {
