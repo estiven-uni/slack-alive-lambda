@@ -879,7 +879,7 @@ async function responderCallback(callbackId) {
 /**
  * Procesa comandos de Telegram y mensajes de texto
  */
-async function procesarComandoTelegram(comando, chatId, messageId, esTexto = false) {
+async function procesarComandoTelegram(comando, chatId, messageId, esTexto = false, textoCompleto = '') {
     const ahora = obtenerHoraColombia();
     const horaFormato = formatearHoraAMPM(ahora);
     const fechaFormato = formatearFecha(ahora);
@@ -1051,7 +1051,7 @@ async function procesarComandoTelegram(comando, chatId, messageId, esTexto = fal
         case '/sethorario':
             // Parsear parámetros del comando
             // Formato: /sethorario inicio=8 fin=17 almuerzo_inicio=13 almuerzo_fin=14
-            const partes = text.split(' ').slice(1);
+            const partes = textoCompleto.split(' ').slice(1);
             const parametros = {};
             
             partes.forEach(parte => {
@@ -1200,7 +1200,7 @@ export const telegramHandler = async (event, context) => {
             };
             
             const comando = comandoMap[callbackData] || callbackData;
-            await procesarComandoTelegram(comando, chatId, messageId);
+            await procesarComandoTelegram(comando, chatId, messageId, false, comando);
             
             return {
                 statusCode: 200,
@@ -1260,7 +1260,7 @@ export const telegramHandler = async (event, context) => {
         console.log(`📱 Procesando: ${comando} (${esTexto ? 'texto' : 'comando'}) de chat ${chatId}`);
         
         // Procesar el comando o texto
-        await procesarComandoTelegram(comando, chatId, messageId, esTexto);
+        await procesarComandoTelegram(comando, chatId, messageId, esTexto, text);
         
         return {
             statusCode: 200,
@@ -1284,7 +1284,7 @@ export const telegramHandler = async (event, context) => {
 export const handler = async (event, context) => {
     try {
         // Detectar si es un webhook de Telegram (Lambda Function URL)
-        // Los eventos de Telegram vienen con body.message
+        // Los eventos de Telegram vienen con body.message o body.callback_query
         if (event.body) {
             let body;
             try {
@@ -1294,7 +1294,7 @@ export const handler = async (event, context) => {
                 body = event.body;
             }
             
-            if (body && body.message) {
+            if (body && (body.message || body.callback_query)) {
                 console.log('📱 Detectado evento de Telegram');
                 return await telegramHandler(event, context);
             }
