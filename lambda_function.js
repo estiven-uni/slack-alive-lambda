@@ -5,18 +5,12 @@
  */
 
 import https from 'https';
-import { LambdaClient, UpdateFunctionConfigurationCommand, GetFunctionConfigurationCommand } from '@aws-sdk/client-lambda';
 
 // Configuración
 const SLACK_TOKEN = process.env.SLACK_TOKEN;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TIMEZONE_COLOMBIA = 'America/Bogota';
-const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
-const AWS_REGION = process.env.AWS_REGION || 'us-east-2';
-
-// Cliente de AWS Lambda
-const lambdaClient = new LambdaClient({ region: AWS_REGION });
 
 // Horarios de trabajo configurables desde variables de entorno (hora de Colombia)
 // Valores por defecto si no están configurados
@@ -28,6 +22,10 @@ const HORA_ALMUERZO_FIN = parseInt(process.env.HORA_ALMUERZO_FIN || '14');      
 // Cache de días festivos (para evitar múltiples llamadas a la API)
 let cacheFestivos = {};
 const CACHE_DURACION = 24 * 60 * 60 * 1000; // 24 horas en milisegundos
+
+// Control de silencio de notificaciones de estado ausente
+// Almacena el timestamp hasta el cual las notificaciones están silenciadas
+let silencioNotificacionesHasta = null;
 
 // Días festivos de respaldo (fallback si la API falla)
 const DIAS_FESTIVOS_FALLBACK = {
@@ -78,6 +76,63 @@ function formatearFecha(fecha) {
     const mes = String(fecha.getMonth() + 1).padStart(2, '0');
     const dia = String(fecha.getDate()).padStart(2, '0');
     return `${año}-${mes}-${dia}`;
+}
+
+/**
+ * Verifica si las notificaciones de estado ausente están silenciadas
+ * @returns {boolean} True si están silenciadas, False si no
+ */
+function estanNotificacionesSilenciadas() {
+    if (!silencioNotificacionesHasta) {
+        return false;
+    }
+    
+    const ahora = Date.now();
+    if (ahora < silencioNotificacionesHasta) {
+        return true;
+    }
+    
+    // El silencio ha expirado, limpiar
+    silencioNotificacionesHasta = null;
+    return false;
+}
+
+/**
+ * Silencia las notificaciones de estado ausente por un tiempo determinado
+ * @param {number} minutos - Minutos a silenciar (15, 30, 60)
+ * @returns {Date} Fecha/hora hasta la que estarán silenciadas
+ */
+function silenciarNotificaciones(minutos) {
+    const ahora = Date.now();
+    silencioNotificacionesHasta = ahora + (minutos * 60 * 1000);
+    return new Date(silencioNotificacionesHasta);
+}
+
+/**
+ * Obtiene el tiempo restante de silencio
+ * @returns {number|null} Minutos restantes o null si no está silenciado
+ */
+function obtenerTiempoRestanteSilencio() {
+    if (!silencioNotificacionesHasta) {
+        return null;
+    }
+    
+    const ahora = Date.now();
+    const diferencia = silencioNotificacionesHasta - ahora;
+    
+    if (diferencia <= 0) {
+        silencioNotificacionesHasta = null;
+        return null;
+    }
+    
+    return Math.ceil(diferencia / (60 * 1000)); // Retorna minutos
+}
+
+/**
+ * Desactiva el silencio de notificaciones
+ */
+function desactivarSilencio() {
+    silencioNotificacionesHasta = null;
 }
 
 /**
@@ -687,11 +742,11 @@ function crearTecladoPrincipal() {
             { text: '🟡 Ausente' }
         ],
         [
-            { text: 'ℹ️ Info' },
+            { text: '🔕 Silenciar' },
             { text: '🕐 Horario' }
         ],
         [
-            { text: '🧪 Test' },
+            { text: 'ℹ️ Info' },
             { text: '❓ Ayuda' }
         ]
     ];
@@ -757,6 +812,10 @@ async function configurarComandosBot(chatId = null) {
         {
             command: 'test',
             description: 'Probar conexión con Slack'
+        },
+        {
+            command: 'silenciar',
+            description: 'Silenciar notificaciones de ausente (15m, 30m, 1h)'
         },
         {
             command: 'help',
@@ -944,41 +1003,6 @@ async function procesarCallbackConfiguracion(callbackData, chatId, messageId) {
 }
 
 /**
- * Actualiza una variable de entorno en Lambda
- */
-async function actualizarVariableEntorno(nombreVariable, valor) {
-    try {
-        // Obtener la configuración actual
-        const getCommand = new GetFunctionConfigurationCommand({
-            FunctionName: FUNCTION_NAME
-        });
-        
-        const currentConfig = await lambdaClient.send(getCommand);
-        
-        // Crear nueva configuración con la variable actualizada
-        const nuevasVariables = {
-            ...currentConfig.Environment.Variables,
-            [nombreVariable]: String(valor)
-        };
-        
-        // Actualizar la función con las nuevas variables
-        const updateCommand = new UpdateFunctionConfigurationCommand({
-            FunctionName: FUNCTION_NAME,
-            Environment: {
-                Variables: nuevasVariables
-            }
-        });
-        
-        await lambdaClient.send(updateCommand);
-        
-        return { success: true };
-    } catch (error) {
-        console.error(`Error actualizando variable de entorno: ${error.message}`);
-        return { success: false, error: error.message };
-    }
-}
-
-/**
  * Procesa la selección de hora
  */
 async function procesarSeleccionHora(callbackData, chatId, messageId) {
@@ -1003,43 +1027,22 @@ async function procesarSeleccionHora(callbackData, chatId, messageId) {
     
     const horaFormato = hora < 12 ? `${hora === 0 ? 12 : hora}:00 AM` : hora === 12 ? '12:00 PM' : `${hora - 12}:00 PM`;
     
-    // Mostrar mensaje de procesando
     await enviarNotificacionTelegram(
-        `⏳ <b>Actualizando ${titulos[tipo]}...</b>\n\n` +
+        `✅ <b>${titulos[tipo]} Configurado</b>\n\n` +
         `Nueva hora: <b>${horaFormato}</b>\n\n` +
-        `Por favor espera unos segundos...`,
+        `📝 <b>Para aplicar este cambio:</b>\n\n` +
+        `1. Ve a AWS Lambda Console\n` +
+        `2. Selecciona tu función "slack-alive"\n` +
+        `3. Ve a <b>Configuration → Environment variables</b>\n` +
+        `4. Haz clic en <b>Edit</b>\n` +
+        `5. Busca la variable <code>${variables[tipo]}</code>\n` +
+        `6. Cámbiala a: <code>${hora}</code>\n` +
+        `7. Haz clic en <b>Save</b>\n\n` +
+        `💡 <i>El cambio se aplicará automáticamente en la próxima ejecución del Lambda.</i>\n\n` +
+        `🔄 Usa /horario para ver la configuración actual`,
         chatId,
         messageId
     );
-    
-    // Actualizar la variable de entorno automáticamente
-    const resultado = await actualizarVariableEntorno(variables[tipo], hora);
-    
-    if (resultado.success) {
-        await enviarNotificacionTelegram(
-            `✅ <b>${titulos[tipo]} Actualizado Automáticamente</b>\n\n` +
-            `Nueva hora: <b>${horaFormato}</b>\n\n` +
-            `🎉 ¡El cambio se aplicó automáticamente!\n` +
-            `El nuevo horario estará activo en la próxima ejecución del Lambda (máximo 1 minuto).\n\n` +
-            `🔄 Usa /horario para ver la configuración actualizada`,
-            chatId,
-            messageId
-        );
-    } else {
-        await enviarNotificacionTelegram(
-            `❌ <b>Error al actualizar automáticamente</b>\n\n` +
-            `No se pudo actualizar la variable de entorno automáticamente.\n` +
-            `Error: ${resultado.error}\n\n` +
-            `📝 <b>Actualización manual requerida:</b>\n` +
-            `1. Ve a AWS Lambda Console\n` +
-            `2. Selecciona tu función "slack-alive"\n` +
-            `3. Ve a Configuration → Environment variables\n` +
-            `4. Edita <code>${variables[tipo]}</code> a <code>${hora}</code>\n` +
-            `5. Guarda los cambios`,
-            chatId,
-            messageId
-        );
-    }
     
     return {
         statusCode: 200,
@@ -1073,6 +1076,8 @@ async function procesarComandoTelegram(comando, chatId, messageId, esTexto = fal
         'horario': '/horario',
         '🧪 test': '/test',
         'test': '/test',
+        '🔕 silenciar': '/silenciar',
+        'silenciar': '/silenciar',
         '❓ ayuda': '/help',
         'ayuda': '/help'
     };
@@ -1249,6 +1254,48 @@ async function procesarComandoTelegram(comando, chatId, messageId, esTexto = fal
                 tecladoHorarios
             );
         
+        case '/silenciar':
+            // Verificar si ya están silenciadas
+            const tiempoRestante = obtenerTiempoRestanteSilencio();
+            
+            let mensajeSilencio = '';
+            if (tiempoRestante) {
+                mensajeSilencio = `🔕 <b>Notificaciones Silenciadas</b>\n\n` +
+                                 `Las notificaciones de estado ausente están silenciadas.\n` +
+                                 `⏱️ Tiempo restante: <b>${tiempoRestante} minutos</b>\n\n` +
+                                 `Selecciona una opción:`;
+            } else {
+                mensajeSilencio = `🔕 <b>Silenciar Notificaciones</b>\n\n` +
+                                 `Silencia las notificaciones de <b>estado ausente</b> temporalmente.\n\n` +
+                                 `💡 <i>Las notificaciones de momentos clave (entrada, almuerzo, salida) NO se silencian.</i>\n\n` +
+                                 `Selecciona el tiempo:`;
+            }
+            
+            const tecladoSilenciar = [
+                [
+                    { text: '🔕 15 minutos', callback_data: 'silenciar_15' },
+                    { text: '🔕 30 minutos', callback_data: 'silenciar_30' }
+                ],
+                [
+                    { text: '🔕 1 hora', callback_data: 'silenciar_60' }
+                ]
+            ];
+            
+            // Si ya está silenciado, agregar botón para desactivar
+            if (tiempoRestante) {
+                tecladoSilenciar.push([
+                    { text: '🔔 Desactivar silencio', callback_data: 'silenciar_desactivar' }
+                ]);
+            }
+            
+            return await enviarNotificacionTelegram(
+                mensajeSilencio,
+                chatId,
+                messageId,
+                null,
+                tecladoSilenciar
+            );
+        
         case '/test':
             const estadoTest = await obtenerEstadoSlack();
             const conexionOk = estadoTest !== 'error';
@@ -1342,6 +1389,49 @@ export const telegramHandler = async (event, context) => {
                     chatId,
                     messageId
                 );
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({ ok: true })
+                };
+            }
+            
+            // Procesar callbacks de silenciar notificaciones
+            if (callbackData.startsWith('silenciar_')) {
+                const accion = callbackData.replace('silenciar_', '');
+                const ahora = obtenerHoraColombia();
+                const horaFormato = formatearHoraAMPM(ahora);
+                
+                if (accion === 'desactivar') {
+                    desactivarSilencio();
+                    await enviarNotificacionTelegram(
+                        `🔔 <b>Notificaciones Activadas</b>\n\n` +
+                        `Las notificaciones de estado ausente han sido reactivadas.\n` +
+                        `Hora: ${horaFormato}`,
+                        chatId,
+                        messageId
+                    );
+                } else {
+                    const minutos = parseInt(accion);
+                    const hastaFecha = silenciarNotificaciones(minutos);
+                    const hastaHora = formatearHoraAMPM(new Date(hastaFecha.toLocaleString('en-US', { timeZone: 'America/Bogota' })));
+                    
+                    let tiempoTexto = '';
+                    if (minutos === 15) tiempoTexto = '15 minutos';
+                    else if (minutos === 30) tiempoTexto = '30 minutos';
+                    else if (minutos === 60) tiempoTexto = '1 hora';
+                    
+                    await enviarNotificacionTelegram(
+                        `🔕 <b>Notificaciones Silenciadas</b>\n\n` +
+                        `Las notificaciones de estado ausente han sido silenciadas por <b>${tiempoTexto}</b>.\n\n` +
+                        `⏱️ Se reactivarán a las: <b>${hastaHora}</b>\n\n` +
+                        `💡 <i>Usa /silenciar para desactivar antes o extender el tiempo.</i>`,
+                        chatId,
+                        messageId
+                    );
+                    
+                    console.log(`🔕 Notificaciones silenciadas por ${minutos} minutos hasta ${hastaHora}`);
+                }
+                
                 return {
                     statusCode: 200,
                     body: JSON.stringify({ ok: true })
@@ -1608,18 +1698,34 @@ async function cloudWatchHandler(event, context) {
     console.log(`🔍 Estado actual de Slack: ${estadoAntes}`);
     
     // DETECCIÓN DE AUSENTE: Si está ausente durante horario laboral, enviar notificación INMEDIATAMENTE
+    // Solo si las notificaciones NO están silenciadas
     if (estadoAntes === 'away') {
-        const fechaFormato = formatearFecha(ahora);
-        const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-        const nombreDia = diasSemana[ahora.getDay()];
-        
-        // Notificación normal de ausente detectado
-        const mensaje = `⚠️ <b>Estado AUSENTE detectado en Slack</b>\n\n` +
-                       `Fecha: ${fechaFormato} (${nombreDia})\n` +
-                       `Hora: ${horaFormato}\n` +
-                       `Estado: AUSENTE\n\n` +
-                       `Abre Slack para mantenerte activo.`;
-        await enviarNotificacionTelegram(mensaje);
+        if (estanNotificacionesSilenciadas()) {
+            const tiempoRestante = obtenerTiempoRestanteSilencio();
+            console.log(`🔕 Notificación de ausente silenciada (${tiempoRestante} minutos restantes)`);
+        } else {
+            const fechaFormato = formatearFecha(ahora);
+            const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+            const nombreDia = diasSemana[ahora.getDay()];
+            
+            // Notificación normal de ausente detectado con botón para silenciar
+            const mensaje = `⚠️ <b>Estado AUSENTE detectado en Slack</b>\n\n` +
+                           `Fecha: ${fechaFormato} (${nombreDia})\n` +
+                           `Hora: ${horaFormato}\n` +
+                           `Estado: AUSENTE\n\n` +
+                           `Abre Slack para mantenerte activo.`;
+            
+            // Agregar botones inline para silenciar rápidamente
+            const tecladoSilenciarRapido = [
+                [
+                    { text: '🔕 15 min', callback_data: 'silenciar_15' },
+                    { text: '🔕 30 min', callback_data: 'silenciar_30' },
+                    { text: '🔕 1 hora', callback_data: 'silenciar_60' }
+                ]
+            ];
+            
+            await enviarNotificacionTelegram(mensaje, null, null, null, tecladoSilenciarRapido);
+        }
     }
     
     // Establecer estado activo

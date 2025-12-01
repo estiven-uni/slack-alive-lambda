@@ -6,11 +6,10 @@ Mantén tu estado de Slack siempre activo usando AWS Lambda con notificaciones p
 
 - ✅ Mantiene tu estado de Slack como "active" automáticamente
 - ✅ **Comandos interactivos de Telegram** para controlar el estado manualmente
-- ✅ **Configuración de horarios con interfaz visual** - Cambia horarios desde Telegram con botones
-- ✅ **Actualización automática de horarios** - Los cambios se aplican sin ir a AWS Console
 - ✅ Notificaciones por Telegram cuando detecta ausente
 - ✅ Notificaciones en momentos clave (inicio, almuerzo, vuelta, fin)
 - ✅ Respeta días festivos de Colombia (consulta API automática)
+- ✅ Horario laboral configurable desde variables de entorno o Telegram
 - ✅ **Estado ausente automático durante el almuerzo (1pm-2pm)** y vuelta a activo a las 2pm
 - ✅ Establece estado ausente automáticamente a las 5pm
 - ✅ Alertas de errores cuando el token expira o hay problemas
@@ -48,7 +47,6 @@ Mantén tu estado de Slack siempre activo usando AWS Lambda con notificaciones p
 
 - **Instalación:** Ver `INSTRUCCIONES_LAMBDA.md` para instrucciones detalladas paso a paso
 - **Comandos de Telegram:** Ver `TELEGRAM_COMMANDS.md` para configurar y usar comandos interactivos
-- **Permisos IAM:** Ver `PERMISOS_LAMBDA.md` para habilitar actualización automática de horarios
 - **Despliegue automático:** Ver `DEPLOY.md` para configurar GitHub Actions
 
 ## 🔔 Notificaciones

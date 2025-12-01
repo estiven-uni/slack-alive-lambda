@@ -134,6 +134,15 @@ El sistema realiza cambios automáticos de estado mediante requests a la API de 
 - Respuesta a mensajes específicos (reply)
 - Manejo de errores de envío
 
+### 3.6. Silenciar Notificaciones de Estado Ausente
+- Silencia temporalmente las notificaciones de "estado ausente detectado"
+- Opciones de tiempo: 15 minutos, 30 minutos, 1 hora
+- Botones rápidos de silenciar directamente en la notificación de ausente
+- Comando `/silenciar` para configurar o ver estado del silencio
+- Posibilidad de desactivar el silencio antes de que expire
+- **NO afecta** las notificaciones de momentos clave (entrada, almuerzo, salida)
+- El silencio se mantiene mientras la instancia de Lambda esté activa
+
 ---
 
 ## 🤖 4. Comandos de Telegram
@@ -164,22 +173,31 @@ El sistema realiza cambios automáticos de estado mediante requests a la API de 
   - Muestra estado actual
   - Confirma que todo funciona correctamente
 
-### 4.5. Procesamiento de Comandos
+### 4.5. Comando de Silenciar Notificaciones
+- `/silenciar` - Silenciar notificaciones de estado ausente temporalmente
+  - Muestra menú con opciones de tiempo (15min, 30min, 1hr)
+  - Si ya está silenciado, muestra tiempo restante y opción de desactivar
+  - Botones inline para selección rápida de tiempo
+  - Solo silencia notificaciones de "ausente detectado"
+  - Las notificaciones de momentos clave (8am, 1pm, 2pm, 5pm) NO se silencian
+
+### 4.6. Procesamiento de Comandos
 - Soporte para comandos con "/" (ej: `/status`)
 - Soporte para texto de botones (ej: "📊 Estado")
 - Mapeo automático de texto a comandos
 - Validación de chat autorizado (si está configurado `TELEGRAM_CHAT_ID`)
 
-### 4.6. Interfaz de Usuario
+### 4.7. Interfaz de Usuario
 - Teclado principal con botones de acceso rápido
 - Botones inline para acciones rápidas
 - Autocompletado de comandos en Telegram
 - Configuración automática de comandos del bot
 
-### 4.7. Manejo de Callbacks
+### 4.8. Manejo de Callbacks
 - Respuesta a callbacks de botones inline
 - Eliminación de estado "loading" en botones
 - Procesamiento de acciones desde botones
+- Callbacks para silenciar notificaciones (silenciar_15, silenciar_30, silenciar_60, silenciar_desactivar)
 
 ---
 
@@ -258,7 +276,14 @@ El sistema realiza cambios automáticos de estado mediante requests a la API de 
 - Manejo de errores de red
 - Parsing automático de respuestas JSON
 
-### 7.4. Logs y Debugging
+### 7.4. Control de Silencio de Notificaciones
+- `estanNotificacionesSilenciadas()` - Verifica si las notificaciones están silenciadas
+- `silenciarNotificaciones(minutos)` - Silencia notificaciones por un tiempo determinado
+- `obtenerTiempoRestanteSilencio()` - Obtiene minutos restantes de silencio
+- `desactivarSilencio()` - Desactiva el silencio manualmente
+- Variable global `silencioNotificacionesHasta` para almacenar timestamp de expiración
+
+### 7.5. Logs y Debugging
 - Logs detallados en CloudWatch
 - Mensajes informativos con emojis
 - Logs de estado antes y después de cambios
